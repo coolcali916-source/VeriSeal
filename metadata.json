@@ -1,0 +1,6 @@
+{
+  "name": "VeriSeal",
+  "description": "Remote online notarization platform with multi-format document folders, ECDSA cryptographic signing, trusted timestamping, chain-of-custody ledger, and public certificate verification.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

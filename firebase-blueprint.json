@@ -1,0 +1,617 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account profile, personal information, and optional notary commission credentials.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "commissionNumber": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "commissionJurisdiction": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "commissionExpires": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "customStampDataUrl": {
+          "type": "string",
+          "maxLength": 180000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "email",
+        "phone",
+        "location",
+        "commissionNumber",
+        "commissionJurisdiction",
+        "commissionExpires",
+        "customStampDataUrl",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DocumentFolder": {
+      "title": "DocumentFolder",
+      "description": "User-created folder for organizing notarization documents.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerId", "name", "createdAt", "updatedAt"]
+    },
+    "NotarizationCase": {
+      "title": "NotarizationCase",
+      "description": "A notarization session document with file metadata, SHA-256 digest, ECDSA digital signature, and timestamp.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "folderId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "fileType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "fileSize": {
+          "type": "number"
+        },
+        "actType": {
+          "type": "string",
+          "enum": ["Acknowledgment", "Jurat", "Copy Certification", "Oath / Affirmation"]
+        },
+        "notarizationMode": {
+          "type": "string",
+          "enum": ["online", "in_person"]
+        },
+        "meetingLocation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "identity_verified", "signed", "notarized"]
+        },
+        "signerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "signerEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120
+        },
+        "documentText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60000
+        },
+        "documentHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "idMethod": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "idScore": {
+          "type": "number"
+        },
+        "kbaPassed": {
+          "type": "boolean"
+        },
+        "signerSignatureData": {
+          "type": "string",
+          "maxLength": 150000
+        },
+        "signatureType": {
+          "type": "string",
+          "enum": ["none", "drawn", "typed"]
+        },
+        "notaryName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "notaryCommission": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "notaryJurisdiction": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "notaryExpires": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "notaryStampDataUrl": {
+          "type": "string",
+          "maxLength": 180000
+        },
+        "includeCertifiedLogo": {
+          "type": "boolean"
+        },
+        "includeNotarizedMark": {
+          "type": "boolean"
+        },
+        "certificateCode": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "sealedHash": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "signatureAlgorithm": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "publicKeyJwk": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "digitalSignature": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "signedPayload": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "timestampIso": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "feeCents": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "notarizedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "folderId",
+        "title",
+        "fileName",
+        "fileType",
+        "fileSize",
+        "actType",
+        "notarizationMode",
+        "meetingLocation",
+        "status",
+        "signerName",
+        "signerEmail",
+        "documentText",
+        "documentHash",
+        "idMethod",
+        "idScore",
+        "kbaPassed",
+        "signerSignatureData",
+        "signatureType",
+        "notaryName",
+        "notaryCommission",
+        "notaryJurisdiction",
+        "notaryExpires",
+        "notaryStampDataUrl",
+        "includeCertifiedLogo",
+        "includeNotarizedMark",
+        "certificateCode",
+        "sealedHash",
+        "signatureAlgorithm",
+        "publicKeyJwk",
+        "digitalSignature",
+        "signedPayload",
+        "timestampIso",
+        "feeCents",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CustodyEvent": {
+      "title": "CustodyEvent",
+      "description": "Immutable chain-of-custody audit event linked to a notarization case.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "caseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "step": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "details": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "eventHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "recordedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerId", "caseId", "step", "actor", "details", "eventHash", "recordedAt"]
+    },
+    "JournalEntry": {
+      "title": "JournalEntry",
+      "description": "Immutable statutory electronic notary journal record created atomically upon notarization completion.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "caseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "entryNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "documentTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "actType": {
+          "type": "string",
+          "enum": ["Acknowledgment", "Jurat", "Copy Certification", "Oath / Affirmation"]
+        },
+        "notarizationMode": {
+          "type": "string",
+          "enum": ["online", "in_person"]
+        },
+        "meetingLocation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "signerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "idMethod": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "certificateCode": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 40
+        },
+        "sealedHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "timestampIso": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        },
+        "feeCents": {
+          "type": "number"
+        },
+        "recordedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "caseId",
+        "entryNumber",
+        "documentTitle",
+        "fileName",
+        "actType",
+        "notarizationMode",
+        "meetingLocation",
+        "signerName",
+        "idMethod",
+        "certificateCode",
+        "sealedHash",
+        "timestampIso",
+        "feeCents",
+        "recordedAt"
+      ]
+    },
+    "VerificationRecord": {
+      "title": "VerificationRecord",
+      "description": "Publicly lookupable certificate verification record containing non-PII cryptographic hashes, ECDSA signature, and notary commission details.",
+      "type": "object",
+      "properties": {
+        "certificateCode": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 40,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "caseId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "documentTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "fileSize": {
+          "type": "number"
+        },
+        "actType": {
+          "type": "string",
+          "enum": ["Acknowledgment", "Jurat", "Copy Certification", "Oath / Affirmation"]
+        },
+        "notarizationMode": {
+          "type": "string",
+          "enum": ["online", "in_person"]
+        },
+        "meetingLocation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "documentHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "sealedHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "signatureAlgorithm": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "publicKeyJwk": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 1000
+        },
+        "digitalSignature": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 512
+        },
+        "signedPayload": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 4000
+        },
+        "timestampIso": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        },
+        "notaryName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "notaryCommission": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "notaryJurisdiction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "notaryExpires": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "notarizedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "certificateCode",
+        "ownerId",
+        "caseId",
+        "documentTitle",
+        "fileName",
+        "fileSize",
+        "actType",
+        "notarizationMode",
+        "meetingLocation",
+        "documentHash",
+        "sealedHash",
+        "signatureAlgorithm",
+        "publicKeyJwk",
+        "digitalSignature",
+        "signedPayload",
+        "timestampIso",
+        "notaryName",
+        "notaryCommission",
+        "notaryJurisdiction",
+        "notaryExpires",
+        "notarizedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/userProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user personal info and notary commission settings."
+    },
+    "/folders/{folderId}": {
+      "schema": { "$ref": "#/entities/DocumentFolder" },
+      "description": "User document folders for organizing notarization requests."
+    },
+    "/notarizations/{caseId}": {
+      "schema": { "$ref": "#/entities/NotarizationCase" },
+      "description": "Notarization session records owned by the authenticated user."
+    },
+    "/notarizations/{caseId}/custodyEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/CustodyEvent" },
+      "description": "Immutable chain-of-custody audit trail events for each notarization case."
+    },
+    "/journalEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/JournalEntry" },
+      "description": "Immutable statutory electronic notary journal entries."
+    },
+    "/verifications/{certificateCode}": {
+      "schema": { "$ref": "#/entities/VerificationRecord" },
+      "description": "Public single-document certificate verification records with ECDSA signature and timestamp proof."
+    }
+  }
+}

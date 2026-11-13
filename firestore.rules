@@ -1,0 +1,452 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'password'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true && (
+          request.auth.token.email == 'coolcali916@gmail.com' ||
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        );
+    }
+
+    function isValidActType(val) {
+      return val is string && (
+        val == 'Acknowledgment' ||
+        val == 'Jurat' ||
+        val == 'Copy Certification' ||
+        val == 'Oath / Affirmation'
+      );
+    }
+
+    function isValidNotarizationMode(val) {
+      return val is string && (val == 'online' || val == 'in_person');
+    }
+
+    function isValidStatus(val) {
+      return val is string && (
+        val == 'draft' ||
+        val == 'identity_verified' ||
+        val == 'signed' ||
+        val == 'notarized'
+      );
+    }
+
+    function isValidSignatureType(val) {
+      return val is string && (
+        val == 'none' ||
+        val == 'drawn' ||
+        val == 'typed'
+      );
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'email', 'phone', 'location',
+          'commissionNumber', 'commissionJurisdiction', 'commissionExpires',
+          'customStampDataUrl', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'phone', 'location',
+          'commissionNumber', 'commissionJurisdiction', 'commissionExpires',
+          'customStampDataUrl', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.email is string && data.email.size() <= 120 &&
+        data.phone is string && data.phone.size() <= 40 &&
+        data.location is string && data.location.size() <= 120 &&
+        data.commissionNumber is string && data.commissionNumber.size() <= 60 &&
+        data.commissionJurisdiction is string && data.commissionJurisdiction.size() <= 60 &&
+        data.commissionExpires is string && data.commissionExpires.size() <= 30 &&
+        data.customStampDataUrl is string && data.customStampDataUrl.size() <= 180000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFolder(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'ownerId', 'name', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) && data.id.size() <= 64 &&
+        isValidId(data.ownerId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidNotarization(data) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'folderId', 'title', 'fileName', 'fileType', 'fileSize',
+          'actType', 'notarizationMode', 'meetingLocation', 'status', 'signerName', 'signerEmail',
+          'documentText', 'documentHash', 'idMethod', 'idScore', 'kbaPassed',
+          'signerSignatureData', 'signatureType', 'notaryName', 'notaryCommission',
+          'notaryJurisdiction', 'notaryExpires', 'notaryStampDataUrl', 'includeCertifiedLogo',
+          'includeNotarizedMark', 'certificateCode', 'sealedHash',
+          'signatureAlgorithm', 'publicKeyJwk', 'digitalSignature', 'signedPayload',
+          'timestampIso', 'feeCents', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'folderId', 'title', 'fileName', 'fileType', 'fileSize',
+          'actType', 'notarizationMode', 'meetingLocation', 'status', 'signerName', 'signerEmail',
+          'documentText', 'documentHash', 'idMethod', 'idScore', 'kbaPassed',
+          'signerSignatureData', 'signatureType', 'notaryName', 'notaryCommission',
+          'notaryJurisdiction', 'notaryExpires', 'notaryStampDataUrl', 'includeCertifiedLogo',
+          'includeNotarizedMark', 'certificateCode', 'sealedHash',
+          'signatureAlgorithm', 'publicKeyJwk', 'digitalSignature', 'signedPayload',
+          'timestampIso', 'feeCents', 'createdAt', 'updatedAt', 'notarizedAt'
+        ]) &&
+        isValidId(data.id) && data.id.size() <= 64 &&
+        isValidId(data.ownerId) &&
+        data.folderId is string && data.folderId.size() <= 64 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 180 &&
+        data.fileType is string && data.fileType.size() >= 1 && data.fileType.size() <= 100 &&
+        (data.fileSize is int || data.fileSize is float) && data.fileSize >= 0 && data.fileSize <= 104857600 &&
+        isValidActType(data.actType) &&
+        isValidNotarizationMode(data.notarizationMode) &&
+        data.meetingLocation is string && data.meetingLocation.size() <= 160 &&
+        isValidStatus(data.status) &&
+        data.signerName is string && data.signerName.size() >= 1 && data.signerName.size() <= 100 &&
+        data.signerEmail is string && data.signerEmail.size() >= 3 && data.signerEmail.size() <= 120 &&
+        data.documentText is string && data.documentText.size() >= 1 && data.documentText.size() <= 60000 &&
+        data.documentHash is string && data.documentHash.size() == 64 &&
+        data.idMethod is string && data.idMethod.size() <= 80 &&
+        (data.idScore is int || data.idScore is float) && data.idScore >= 0 && data.idScore <= 100 &&
+        data.kbaPassed is bool &&
+        data.signerSignatureData is string && data.signerSignatureData.size() <= 150000 &&
+        isValidSignatureType(data.signatureType) &&
+        data.notaryName is string && data.notaryName.size() <= 100 &&
+        data.notaryCommission is string && data.notaryCommission.size() <= 60 &&
+        data.notaryJurisdiction is string && data.notaryJurisdiction.size() <= 60 &&
+        data.notaryExpires is string && data.notaryExpires.size() <= 30 &&
+        data.notaryStampDataUrl is string && data.notaryStampDataUrl.size() <= 180000 &&
+        data.includeCertifiedLogo is bool &&
+        data.includeNotarizedMark is bool &&
+        data.certificateCode is string && data.certificateCode.size() <= 40 &&
+        data.sealedHash is string && data.sealedHash.size() <= 64 &&
+        data.signatureAlgorithm is string && data.signatureAlgorithm.size() <= 40 &&
+        data.publicKeyJwk is string && data.publicKeyJwk.size() <= 1000 &&
+        data.digitalSignature is string && data.digitalSignature.size() <= 512 &&
+        data.signedPayload is string && data.signedPayload.size() <= 4000 &&
+        data.timestampIso is string && data.timestampIso.size() <= 64 &&
+        (data.feeCents is int || data.feeCents is float) && data.feeCents >= 0 && data.feeCents <= 100000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        (!('notarizedAt' in data) || data.notarizedAt is timestamp);
+    }
+
+    function isValidCustodyEvent(data) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'caseId', 'step', 'actor', 'details', 'eventHash', 'recordedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'caseId', 'step', 'actor', 'details', 'eventHash', 'recordedAt'
+        ]) &&
+        isValidId(data.id) && data.id.size() <= 64 &&
+        isValidId(data.ownerId) &&
+        isValidId(data.caseId) && data.caseId.size() <= 64 &&
+        data.step is string && data.step.size() >= 1 && data.step.size() <= 80 &&
+        data.actor is string && data.actor.size() >= 1 && data.actor.size() <= 120 &&
+        data.details is string && data.details.size() >= 1 && data.details.size() <= 300 &&
+        data.eventHash is string && data.eventHash.size() == 64 &&
+        data.recordedAt is timestamp;
+    }
+
+    function isValidJournalEntry(data) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'caseId', 'entryNumber', 'documentTitle', 'fileName', 'actType',
+          'notarizationMode', 'meetingLocation',
+          'signerName', 'idMethod', 'certificateCode', 'sealedHash', 'timestampIso', 'feeCents', 'recordedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerId', 'caseId', 'entryNumber', 'documentTitle', 'fileName', 'actType',
+          'notarizationMode', 'meetingLocation',
+          'signerName', 'idMethod', 'certificateCode', 'sealedHash', 'timestampIso', 'feeCents', 'recordedAt'
+        ]) &&
+        isValidId(data.id) && data.id.size() <= 64 &&
+        isValidId(data.ownerId) &&
+        isValidId(data.caseId) && data.caseId.size() <= 64 &&
+        data.entryNumber is string && data.entryNumber.size() >= 1 && data.entryNumber.size() <= 32 &&
+        data.documentTitle is string && data.documentTitle.size() >= 1 && data.documentTitle.size() <= 140 &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 180 &&
+        isValidActType(data.actType) &&
+        isValidNotarizationMode(data.notarizationMode) &&
+        data.meetingLocation is string && data.meetingLocation.size() <= 160 &&
+        data.signerName is string && data.signerName.size() >= 1 && data.signerName.size() <= 100 &&
+        data.idMethod is string && data.idMethod.size() >= 1 && data.idMethod.size() <= 80 &&
+        data.certificateCode is string && data.certificateCode.size() >= 4 && data.certificateCode.size() <= 40 &&
+        data.sealedHash is string && data.sealedHash.size() == 64 &&
+        data.timestampIso is string && data.timestampIso.size() >= 10 && data.timestampIso.size() <= 64 &&
+        (data.feeCents is int || data.feeCents is float) && data.feeCents >= 0 && data.feeCents <= 100000 &&
+        data.recordedAt is timestamp;
+    }
+
+    function isValidVerification(data) {
+      return data.keys().hasAll([
+          'certificateCode', 'ownerId', 'caseId', 'documentTitle', 'fileName', 'fileSize', 'actType',
+          'notarizationMode', 'meetingLocation',
+          'documentHash', 'sealedHash', 'signatureAlgorithm', 'publicKeyJwk',
+          'digitalSignature', 'signedPayload', 'timestampIso',
+          'notaryName', 'notaryCommission', 'notaryJurisdiction', 'notaryExpires', 'notarizedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'certificateCode', 'ownerId', 'caseId', 'documentTitle', 'fileName', 'fileSize', 'actType',
+          'notarizationMode', 'meetingLocation',
+          'documentHash', 'sealedHash', 'signatureAlgorithm', 'publicKeyJwk',
+          'digitalSignature', 'signedPayload', 'timestampIso',
+          'notaryName', 'notaryCommission', 'notaryJurisdiction', 'notaryExpires', 'notarizedAt'
+        ]) &&
+        isValidId(data.certificateCode) && data.certificateCode.size() >= 4 && data.certificateCode.size() <= 40 &&
+        isValidId(data.ownerId) &&
+        isValidId(data.caseId) && data.caseId.size() <= 64 &&
+        data.documentTitle is string && data.documentTitle.size() >= 1 && data.documentTitle.size() <= 140 &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 180 &&
+        (data.fileSize is int || data.fileSize is float) && data.fileSize >= 0 && data.fileSize <= 104857600 &&
+        isValidActType(data.actType) &&
+        isValidNotarizationMode(data.notarizationMode) &&
+        data.meetingLocation is string && data.meetingLocation.size() <= 160 &&
+        data.documentHash is string && data.documentHash.size() == 64 &&
+        data.sealedHash is string && data.sealedHash.size() == 64 &&
+        data.signatureAlgorithm is string && data.signatureAlgorithm.size() >= 1 && data.signatureAlgorithm.size() <= 40 &&
+        data.publicKeyJwk is string && data.publicKeyJwk.size() >= 10 && data.publicKeyJwk.size() <= 1000 &&
+        data.digitalSignature is string && data.digitalSignature.size() >= 10 && data.digitalSignature.size() <= 512 &&
+        data.signedPayload is string && data.signedPayload.size() >= 10 && data.signedPayload.size() <= 4000 &&
+        data.timestampIso is string && data.timestampIso.size() >= 10 && data.timestampIso.size() <= 64 &&
+        data.notaryName is string && data.notaryName.size() >= 1 && data.notaryName.size() <= 100 &&
+        data.notaryCommission is string && data.notaryCommission.size() >= 1 && data.notaryCommission.size() <= 60 &&
+        data.notaryJurisdiction is string && data.notaryJurisdiction.size() >= 1 && data.notaryJurisdiction.size() <= 60 &&
+        data.notaryExpires is string && data.notaryExpires.size() >= 1 && data.notaryExpires.size() <= 30 &&
+        data.notarizedAt is timestamp;
+    }
+
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow list, write: if false;
+    }
+
+    match /userProfiles/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        (isOwner(userId) || isAdmin()) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'email', 'phone', 'location',
+          'commissionNumber', 'commissionJurisdiction', 'commissionExpires', 'customStampDataUrl', 'updatedAt'
+        ]);
+      allow delete: if isAdmin();
+    }
+
+    match /folders/{folderId} {
+      allow get: if isSignedIn() && isValidId(folderId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(folderId) &&
+        isValidFolder(incoming()) &&
+        incoming().id == folderId &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(folderId) &&
+        isValidFolder(incoming()) &&
+        (existing().ownerId == request.auth.uid || isAdmin()) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']);
+      allow delete: if isVerifiedUser() &&
+        isValidId(folderId) &&
+        (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /notarizations/{caseId} {
+      allow get: if isSignedIn() && isValidId(caseId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(caseId) &&
+        isValidNotarization(incoming()) &&
+        incoming().id == caseId &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().status == 'draft' &&
+        incoming().kbaPassed == false &&
+        incoming().signatureType == 'none' &&
+        incoming().certificateCode == '' &&
+        incoming().sealedHash == '' &&
+        incoming().digitalSignature == '' &&
+        !('notarizedAt' in incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(caseId) &&
+        isValidNotarization(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().ownerId == request.auth.uid &&
+            existing().status != 'notarized' &&
+            (
+              // Action 1: Edit document details, notarization mode, or move folder
+              (
+                incoming().status == existing().status &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'folderId', 'title', 'actType', 'notarizationMode', 'meetingLocation',
+                  'includeCertifiedLogo', 'includeNotarizedMark',
+                  'signerName', 'signerEmail', 'documentText', 'documentHash', 'feeCents', 'updatedAt'
+                ])
+              ) ||
+              // Action 2: Complete identity verification (credential analysis + KBA or in-person ID check)
+              (
+                (existing().status == 'draft' || existing().status == 'identity_verified') &&
+                incoming().status == 'identity_verified' &&
+                incoming().kbaPassed == true &&
+                incoming().idScore >= 80 &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status', 'idMethod', 'idScore', 'kbaPassed', 'meetingLocation', 'updatedAt'
+                ])
+              ) ||
+              // Action 3: Signer applies electronic signature
+              (
+                (existing().status == 'identity_verified' || existing().status == 'signed') &&
+                incoming().status == 'signed' &&
+                incoming().signatureType != 'none' &&
+                incoming().signerSignatureData.size() > 0 &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status', 'signerSignatureData', 'signatureType', 'updatedAt'
+                ])
+              ) ||
+              // Action 4: Commissioned notary applies ECDSA signature, seal, and timestamp
+              (
+                existing().status == 'signed' &&
+                incoming().status == 'notarized' &&
+                incoming().certificateCode.size() >= 4 &&
+                incoming().sealedHash.size() == 64 &&
+                incoming().signatureAlgorithm.size() >= 1 &&
+                incoming().publicKeyJwk.size() >= 10 &&
+                incoming().digitalSignature.size() >= 10 &&
+                incoming().signedPayload.size() >= 10 &&
+                incoming().timestampIso.size() >= 10 &&
+                incoming().notaryName.size() >= 1 &&
+                incoming().notaryCommission.size() >= 1 &&
+                'notarizedAt' in incoming() &&
+                incoming().notarizedAt == request.time &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status', 'notaryName', 'notaryCommission', 'notaryJurisdiction',
+                  'notaryExpires', 'notaryStampDataUrl', 'includeCertifiedLogo', 'includeNotarizedMark',
+                  'certificateCode', 'sealedHash', 'signatureAlgorithm',
+                  'publicKeyJwk', 'digitalSignature', 'signedPayload', 'timestampIso',
+                  'notarizedAt', 'updatedAt'
+                ])
+              )
+            )
+          )
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(caseId) &&
+        (isAdmin() || (existing().ownerId == request.auth.uid && existing().status != 'notarized'));
+
+      match /custodyEvents/{eventId} {
+        allow get: if isSignedIn() && isValidId(caseId) && isValidId(eventId) && (
+          get(/databases/$(database)/documents/notarizations/$(caseId)).data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow list: if isSignedIn() && isValidId(caseId) && (
+          get(/databases/$(database)/documents/notarizations/$(caseId)).data.ownerId == request.auth.uid || isAdmin()
+        );
+        allow create: if isVerifiedUser() &&
+          isValidId(caseId) &&
+          isValidId(eventId) &&
+          isValidCustodyEvent(incoming()) &&
+          incoming().id == eventId &&
+          incoming().caseId == caseId &&
+          incoming().ownerId == request.auth.uid &&
+          incoming().recordedAt == request.time &&
+          (
+            (
+              exists(/databases/$(database)/documents/notarizations/$(caseId)) &&
+              get(/databases/$(database)/documents/notarizations/$(caseId)).data.ownerId == request.auth.uid
+            ) ||
+            getAfter(/databases/$(database)/documents/notarizations/$(caseId)).data.ownerId == request.auth.uid
+          );
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    match /journalEntries/{entryId} {
+      allow get: if isSignedIn() && isValidId(entryId) && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(entryId) &&
+        isValidJournalEntry(incoming()) &&
+        incoming().id == entryId &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().recordedAt == request.time &&
+        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.ownerId == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.status == 'notarized';
+      allow update, delete: if isAdmin();
+    }
+
+    match /verifications/{certificateCode} {
+      allow get: if isValidId(certificateCode);
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser() &&
+        isValidId(certificateCode) &&
+        isValidVerification(incoming()) &&
+        incoming().certificateCode == certificateCode &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().notarizedAt == request.time &&
+        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.ownerId == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.status == 'notarized';
+      allow update, delete: if isAdmin();
+    }
+  }
+}
