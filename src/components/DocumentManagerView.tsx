@@ -56,6 +56,7 @@ interface DocumentManagerViewProps {
     includeCertifiedLogo: boolean;
     includeNotarizedMark: boolean;
     previewObjectUrl?: string;
+    uploadedFile?: File;
   }) => Promise<void>;
   onMoveCaseFolder: (caseId: string, folderId: string) => Promise<void>;
   onDeleteCase: (caseId: string) => Promise<void>;
@@ -118,6 +119,7 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
   const [documentText, setDocumentText] = useState('');
   const [documentHash, setDocumentHash] = useState('');
   const [previewObjectUrl, setPreviewObjectUrl] = useState<string | undefined>(undefined);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [includeCertifiedLogo, setIncludeCertifiedLogo] = useState(true);
   const [includeNotarizedMark, setIncludeNotarizedMark] = useState(true);
   const [parsingFile, setParsingFile] = useState(false);
@@ -141,6 +143,7 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
       setDocumentText(parsed.extractedText);
       setDocumentHash(parsed.documentHash);
       setPreviewObjectUrl(parsed.previewObjectUrl);
+      setUploadedFile(file);
       if (defaultSignerName && (!signerName || signerName === 'Jordan M. Mercer')) {
         setSignerName(defaultSignerName);
       }
@@ -175,6 +178,7 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
     setDocumentText(tpl.body);
     setDocumentHash(hash);
     setPreviewObjectUrl(undefined);
+    setUploadedFile(null);
     if (matchedFolder) setFolderId(matchedFolder.id);
     setShowIntake(true);
   };
@@ -227,6 +231,7 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
         includeCertifiedLogo,
         includeNotarizedMark,
         previewObjectUrl,
+        uploadedFile: uploadedFile || undefined,
       });
       setShowIntake(false);
       setTitle('');
@@ -234,6 +239,7 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
       setDocumentText('');
       setDocumentHash('');
       setPreviewObjectUrl(undefined);
+      setUploadedFile(null);
     } catch (err) {
       setIntakeError(
         err instanceof Error ? err.message : 'Unable to create notarization request.'
@@ -660,7 +666,9 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
                 disabled={submitting}
                 className="px-5 py-2 text-xs font-semibold text-white bg-blue-800 rounded-md hover:bg-blue-900 disabled:opacity-50 cursor-pointer"
               >
-                {submitting ? 'Creating & Hashing...' : 'Create Notarization Request'}
+                {submitting
+                  ? 'Opening & Hashing...'
+                  : 'Open Document to Sign & Stamp'}
               </button>
             </div>
           </form>
@@ -1018,7 +1026,7 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
                             >
                               {docItem.status === 'notarized'
                                 ? 'View Certificate'
-                                : 'Open Room'}
+                                : 'Open & Sign / Stamp'}
                             </button>
                             {docItem.status !== 'notarized' && (
                               <button

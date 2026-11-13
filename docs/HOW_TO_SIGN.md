@@ -2,6 +2,18 @@
 
 This guide walks you through uploading a document in **VeriSeal**, completing **Remote Online Notarization (RON)** or **In-Person Appearance** signing, attaching optional **VeriSeal Certified** and **NOTARIZED** emblems, and issuing a verifiable **Signing Certificate**.
 
+## Video Walkthrough (Online & In-Person)
+
+- **[Watch / Download the In-Depth How-To Video (`veriseal-notary-walkthrough.mp4`)](veriseal-notary-walkthrough.mp4)** *(1080p MP4, ~72s, H.264)*
+
+**Chapters covered in the video:**
+1. **Overview & 4-Stage Pipeline** (`0:00`) — `Draft` → `ID Verified` → `Signer Executed` → `Notarized & Sealed`
+2. **Pre-Session Setup** (`0:08`) — Authentication (`localhost:3000`), Commission Profile & Transparent Stamp Studio
+3. **Document Intake & Emblems** (`0:16`) — Uploading PDF/DOCX/IMG, Mode Selection & **VeriSeal Certified** / **NOTARIZED** toggles
+4. **Online Notarization (RON)** (`0:24`) — Live A/V Cam Check, KBA Verification, Electronic Signature & ECDSA Sealing
+5. **In-Person Appearance** (`0:40`) — Physical Venue, Satisfactory Evidence, 3 Statutory Checks, On-Screen Signature & Journal
+6. **Certificate Export & Public Verification** (`0:56`) — HTML Certificate, Proof JSON & Public Portal Check
+
 ---
 
 ## Step 1: Upload Your Document & Choose a Signing Mode

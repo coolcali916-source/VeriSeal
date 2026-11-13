@@ -123,7 +123,7 @@ service cloud.firestore {
           'documentText', 'documentHash', 'idMethod', 'idScore', 'kbaPassed',
           'signerSignatureData', 'signatureType', 'notaryName', 'notaryCommission',
           'notaryJurisdiction', 'notaryExpires', 'notaryStampDataUrl', 'includeCertifiedLogo',
-          'includeNotarizedMark', 'certificateCode', 'sealedHash',
+          'includeNotarizedMark', 'placement', 'certificateCode', 'sealedHash',
           'signatureAlgorithm', 'publicKeyJwk', 'digitalSignature', 'signedPayload',
           'timestampIso', 'feeCents', 'createdAt', 'updatedAt', 'notarizedAt'
         ]) &&
@@ -164,7 +164,26 @@ service cloud.firestore {
         (data.feeCents is int || data.feeCents is float) && data.feeCents >= 0 && data.feeCents <= 100000 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp &&
-        (!('notarizedAt' in data) || data.notarizedAt is timestamp);
+        (!('notarizedAt' in data) || data.notarizedAt is timestamp) &&
+        (!('placement' in data) || isValidPlacement(data.placement));
+    }
+
+    function isValidPlacementBox(box) {
+      return box is map &&
+        box.keys().hasAll(['page', 'xPct', 'yPct', 'scale']) &&
+        box.keys().hasOnly(['page', 'xPct', 'yPct', 'scale']) &&
+        box.page is int && box.page >= 1 && box.page <= 500 &&
+        (box.xPct is int || box.xPct is float) && box.xPct >= 0 && box.xPct <= 100 &&
+        (box.yPct is int || box.yPct is float) && box.yPct >= 0 && box.yPct <= 100 &&
+        (box.scale is int || box.scale is float) && box.scale >= 0.4 && box.scale <= 2.5;
+    }
+
+    function isValidPlacement(p) {
+      return p is map &&
+        p.keys().hasAll(['signature', 'stamp']) &&
+        p.keys().hasOnly(['signature', 'stamp']) &&
+        isValidPlacementBox(p.signature) &&
+        isValidPlacementBox(p.stamp);
     }
 
     function isValidCustodyEvent(data) {
@@ -335,12 +354,12 @@ service cloud.firestore {
             existing().ownerId == request.auth.uid &&
             existing().status != 'notarized' &&
             (
-              // Action 1: Edit document details, notarization mode, or move folder
+              // Action 1: Edit document details, notarization mode, placement, or move folder
               (
                 incoming().status == existing().status &&
                 incoming().diff(existing()).affectedKeys().hasOnly([
                   'folderId', 'title', 'actType', 'notarizationMode', 'meetingLocation',
-                  'includeCertifiedLogo', 'includeNotarizedMark',
+                  'includeCertifiedLogo', 'includeNotarizedMark', 'placement',
                   'signerName', 'signerEmail', 'documentText', 'documentHash', 'feeCents', 'updatedAt'
                 ])
               ) ||
@@ -361,7 +380,7 @@ service cloud.firestore {
                 incoming().signatureType != 'none' &&
                 incoming().signerSignatureData.size() > 0 &&
                 incoming().diff(existing()).affectedKeys().hasOnly([
-                  'status', 'signerSignatureData', 'signatureType', 'updatedAt'
+                  'status', 'signerSignatureData', 'signatureType', 'placement', 'updatedAt'
                 ])
               ) ||
               // Action 4: Commissioned notary applies ECDSA signature, seal, and timestamp
@@ -382,7 +401,7 @@ service cloud.firestore {
                 incoming().diff(existing()).affectedKeys().hasOnly([
                   'status', 'notaryName', 'notaryCommission', 'notaryJurisdiction',
                   'notaryExpires', 'notaryStampDataUrl', 'includeCertifiedLogo', 'includeNotarizedMark',
-                  'certificateCode', 'sealedHash', 'signatureAlgorithm',
+                  'placement', 'certificateCode', 'sealedHash', 'signatureAlgorithm',
                   'publicKeyJwk', 'digitalSignature', 'signedPayload', 'timestampIso',
                   'notarizedAt', 'updatedAt'
                 ])

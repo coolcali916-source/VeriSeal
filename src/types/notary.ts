@@ -62,6 +62,23 @@ export interface CustodyEvent {
   recordedAtIso: string;
 }
 
+export interface PlacementBox {
+  page: number;
+  xPct: number;
+  yPct: number;
+  scale: number;
+}
+
+export interface DocumentPlacement {
+  signature: PlacementBox;
+  stamp: PlacementBox;
+}
+
+export const DEFAULT_DOCUMENT_PLACEMENT: DocumentPlacement = {
+  signature: { page: 1, xPct: 26, yPct: 78, scale: 1 },
+  stamp: { page: 1, xPct: 75, yPct: 76, scale: 1 },
+};
+
 export interface NotarizationCase {
   id: string;
   ownerId: string;
@@ -90,6 +107,7 @@ export interface NotarizationCase {
   notaryStampDataUrl: string;
   includeCertifiedLogo: boolean;
   includeNotarizedMark: boolean;
+  placement?: DocumentPlacement;
   certificateCode: string;
   sealedHash: string;
   signatureAlgorithm: string;

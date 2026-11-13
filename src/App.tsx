@@ -20,6 +20,7 @@ import {
   FileCheck2,
   FolderKanban,
   Menu,
+  RefreshCw,
   ShieldCheck,
   Stamp,
   UserCircle2,
@@ -39,9 +40,11 @@ import {
 } from './lib/crypto';
 import { DEFAULT_FOLDER_NAMES, LEGAL_TEMPLATES } from './lib/templates';
 import {
+  DEFAULT_DOCUMENT_PLACEMENT,
   type AppView,
   type CustodyEvent,
   type DocumentFolder,
+  type DocumentPlacement,
   type JournalEntry,
   type NotarialActType,
   type NotarizationCase,
@@ -50,6 +53,10 @@ import {
   type UserProfile,
   type VerificationRecord,
 } from './types/notary';
+import {
+  deleteLocalDocumentFile,
+  saveLocalDocumentFile,
+} from './lib/localFileStore';
 import { AuthModal } from './components/AuthModal';
 import { DocumentManagerView } from './components/DocumentManagerView';
 import { SigningRoomView } from './components/SigningRoomView';
@@ -57,6 +64,13 @@ import { JournalView } from './components/JournalView';
 import { VerifyPortalView } from './components/VerifyPortalView';
 import { ProfileView } from './components/ProfileView';
 import { VeriSealBrandIcon } from './components/VeriSealEmblems';
+import {
+  applyAppUpdate,
+  checkForAppUpdate,
+  clearUpdateQueryParam,
+  CURRENT_APP_BUILD,
+  type AppVersionManifest,
+} from './lib/appUpdater';
 
 function makeId(prefix: string): string {
   const bytes = new Uint8Array(5);
@@ -75,6 +89,28 @@ function tsToIso(value: unknown): string {
     return value;
   }
   return new Date().toISOString();
+}
+
+function parsePlacement(raw: unknown): DocumentPlacement | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  const sig = obj.signature as Record<string, unknown> | undefined;
+  const stamp = obj.stamp as Record<string, unknown> | undefined;
+  if (!sig || !stamp) return undefined;
+  return {
+    signature: {
+      page: Math.max(1, Math.round(Number(sig.page) || 1)),
+      xPct: Number(sig.xPct ?? DEFAULT_DOCUMENT_PLACEMENT.signature.xPct),
+      yPct: Number(sig.yPct ?? DEFAULT_DOCUMENT_PLACEMENT.signature.yPct),
+      scale: Number(sig.scale ?? DEFAULT_DOCUMENT_PLACEMENT.signature.scale),
+    },
+    stamp: {
+      page: Math.max(1, Math.round(Number(stamp.page) || 1)),
+      xPct: Number(stamp.xPct ?? DEFAULT_DOCUMENT_PLACEMENT.stamp.xPct),
+      yPct: Number(stamp.yPct ?? DEFAULT_DOCUMENT_PLACEMENT.stamp.yPct),
+      scale: Number(stamp.scale ?? DEFAULT_DOCUMENT_PLACEMENT.stamp.scale),
+    },
+  };
 }
 
 const DEFAULT_PROFILE: UserProfile = {
@@ -114,6 +150,42 @@ export default function App() {
   const [previewUrlsByCase, setPreviewUrlsByCase] = useState<
     Record<string, string>
   >({});
+
+  // App Update State
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [remoteBuild, setRemoteBuild] = useState<AppVersionManifest | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updatingApp, setUpdatingApp] = useState(false);
+  const [updateNotice, setUpdateNotice] = useState('');
+
+  // Clean _upd param & poll /version.json for new deployments
+  useEffect(() => {
+    clearUpdateQueryParam();
+    let lastChecked = 0;
+
+    const runSilentCheck = async () => {
+      const now = Date.now();
+      if (now - lastChecked < 30000) return;
+      lastChecked = now;
+      const result = await checkForAppUpdate();
+      if (result.remoteBuild) {
+        setRemoteBuild(result.remoteBuild);
+      }
+      if (result.updateAvailable) {
+        setUpdateAvailable(true);
+      }
+    };
+
+    void runSilentCheck();
+    const timer = window.setInterval(() => void runSilentCheck(), 5 * 60 * 1000);
+    const onFocus = () => void runSilentCheck();
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
 
   // Boot Firestore connection check + initial sandbox seed
   useEffect(() => {
@@ -198,6 +270,7 @@ export default function App() {
           notaryStampDataUrl: '',
           includeCertifiedLogo: true,
           includeNotarizedMark: true,
+          placement: DEFAULT_DOCUMENT_PLACEMENT,
           certificateCode: '',
           sealedHash: '',
           signatureAlgorithm: '',
@@ -237,6 +310,7 @@ export default function App() {
           notaryStampDataUrl: '',
           includeCertifiedLogo: true,
           includeNotarizedMark: true,
+          placement: DEFAULT_DOCUMENT_PLACEMENT,
           certificateCode: sealResult.certificateCode,
           sealedHash: sealResult.sealedHash,
           signatureAlgorithm: sealResult.signatureAlgorithm,
@@ -500,6 +574,7 @@ export default function App() {
             notaryStampDataUrl: String(d.notaryStampDataUrl || ''),
             includeCertifiedLogo: d.includeCertifiedLogo !== false,
             includeNotarizedMark: d.includeNotarizedMark !== false,
+            placement: parsePlacement(d.placement) || DEFAULT_DOCUMENT_PLACEMENT,
             certificateCode: String(d.certificateCode || ''),
             sealedHash: String(d.sealedHash || ''),
             signatureAlgorithm: String(d.signatureAlgorithm || ''),
@@ -685,6 +760,7 @@ export default function App() {
     includeCertifiedLogo: boolean;
     includeNotarizedMark: boolean;
     previewObjectUrl?: string;
+    uploadedFile?: File;
   }) => {
     const caseId = makeId('case');
     const eventId = makeId('ev');
@@ -702,6 +778,9 @@ export default function App() {
         ...prev,
         [caseId]: payload.previewObjectUrl!,
       }));
+    }
+    if (payload.uploadedFile) {
+      void saveLocalDocumentFile(caseId, payload.documentHash, payload.uploadedFile);
     }
 
     if (firebaseUser) {
@@ -739,6 +818,7 @@ export default function App() {
           notaryStampDataUrl: '',
           includeCertifiedLogo: payload.includeCertifiedLogo,
           includeNotarizedMark: payload.includeNotarizedMark,
+          placement: DEFAULT_DOCUMENT_PLACEMENT,
           certificateCode: '',
           sealedHash: '',
           signatureAlgorithm: '',
@@ -798,6 +878,7 @@ export default function App() {
         notaryStampDataUrl: '',
         includeCertifiedLogo: payload.includeCertifiedLogo,
         includeNotarizedMark: payload.includeNotarizedMark,
+        placement: DEFAULT_DOCUMENT_PLACEMENT,
         certificateCode: '',
         sealedHash: '',
         signatureAlgorithm: '',
@@ -857,6 +938,7 @@ export default function App() {
   };
 
   const handleDeleteCase = async (caseId: string) => {
+    void deleteLocalDocumentFile(caseId);
     if (firebaseUser) {
       try {
         await deleteDoc(doc(db, 'notarizations', caseId));
@@ -1077,6 +1159,33 @@ export default function App() {
             : c
         )
       );
+    }
+  };
+
+  const handleUpdatePlacement = async (
+    caseId: string,
+    placement: DocumentPlacement
+  ) => {
+    const target = cases.find((c) => c.id === caseId);
+    if (!target || target.status === 'notarized') return;
+
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === caseId
+          ? { ...c, placement, updatedAtIso: new Date().toISOString() }
+          : c
+      )
+    );
+
+    if (firebaseUser) {
+      try {
+        await updateDoc(doc(db, 'notarizations', caseId), {
+          placement,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
+      }
     }
   };
 
@@ -1331,6 +1440,34 @@ export default function App() {
     }
   };
 
+  const handleUpdateApp = async (forceReload = false) => {
+    setUpdateNotice('');
+    if (forceReload || updateAvailable) {
+      setUpdatingApp(true);
+      await applyAppUpdate();
+      return;
+    }
+
+    setCheckingUpdate(true);
+    try {
+      const result = await checkForAppUpdate();
+      if (result.remoteBuild) {
+        setRemoteBuild(result.remoteBuild);
+      }
+      if (result.updateAvailable) {
+        setUpdateAvailable(true);
+        setUpdatingApp(true);
+        await applyAppUpdate();
+      } else {
+        setUpdateNotice(
+          `Up to date on build ${CURRENT_APP_BUILD.buildId}.`
+        );
+      }
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
   const navItems: {
     id: AppView;
     label: string;
@@ -1459,7 +1596,38 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              disabled={checkingUpdate || updatingApp}
+              onClick={() => void handleUpdateApp(false)}
+              title={
+                updateAvailable
+                  ? 'A newer version of VeriSeal is ready — click to update'
+                  : `Check for updates (Build ${CURRENT_APP_BUILD.buildId})`
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 ${
+                updateAvailable
+                  ? 'text-white bg-blue-800 hover:bg-blue-900'
+                  : 'text-slate-700 bg-white border border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  checkingUpdate || updatingApp ? 'animate-spin' : ''
+                }`}
+              />
+              <span>
+                {updatingApp
+                  ? 'Updating...'
+                  : checkingUpdate
+                  ? 'Checking...'
+                  : updateAvailable
+                  ? 'Update Ready'
+                  : 'Update App'}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={() => setActiveView('verify')}
@@ -1493,6 +1661,46 @@ export default function App() {
         </header>
 
         <main className="flex-1 p-4 sm:p-8 max-w-[1360px] w-full mx-auto">
+          {(updateAvailable || updateNotice) && (
+            <div
+              className={`no-print mb-5 px-4 py-3 rounded-lg border flex flex-wrap items-center justify-between gap-3 text-xs ${
+                updateAvailable
+                  ? 'bg-blue-50 border-blue-200 text-blue-950'
+                  : 'bg-white border-slate-200 text-slate-700'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <RefreshCw className="w-4 h-4 shrink-0 text-blue-800" />
+                <span>
+                  {updateAvailable
+                    ? `A new VeriSeal update (${
+                        remoteBuild?.buildId || 'latest'
+                      }) is ready to load.`
+                    : updateNotice}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={updatingApp}
+                  onClick={() => void handleUpdateApp(true)}
+                  className="px-3 py-1.5 font-semibold text-white bg-blue-800 rounded hover:bg-blue-900 disabled:opacity-50 cursor-pointer"
+                >
+                  {updateAvailable ? 'Update Now' : 'Reload Fresh Assets'}
+                </button>
+                {!updateAvailable && (
+                  <button
+                    type="button"
+                    onClick={() => setUpdateNotice('')}
+                    aria-label="Dismiss update message"
+                    className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {activeView === 'documents' && (
             <DocumentManagerView
               cases={cases}
@@ -1527,6 +1735,7 @@ export default function App() {
               onApplySignature={handleApplySignature}
               onNotarizeCase={handleNotarizeCase}
               onToggleEmblems={handleToggleEmblems}
+              onUpdatePlacement={handleUpdatePlacement}
               onNavigateVerify={(code) => {
                 setVerifyCodePreset(code);
                 setActiveView('verify');
@@ -1570,6 +1779,11 @@ export default function App() {
                 setActiveCaseId(caseId);
                 setActiveView('signing_room');
               }}
+              updateAvailable={updateAvailable}
+              checkingUpdate={checkingUpdate}
+              updatingApp={updatingApp}
+              remoteBuild={remoteBuild}
+              onUpdateApp={handleUpdateApp}
             />
           )}
         </main>

@@ -30,13 +30,14 @@ VeriSeal is a web-based notarization platform built with **React**, **TypeScript
 
 ---
 
-## How-To Guide (In-Person & Remote Signing)
+## How-To Guide & Video Walkthrough (In-Person & Remote Signing)
 
-See **[docs/HOW_TO_SIGN.md](docs/HOW_TO_SIGN.md)** for the full illustrated step-by-step walkthrough covering:
-1. Uploading documents & selecting **Online (RON)** vs. **In-Person** mode
-2. Completing **Remote Online Notarization** (A/V session, KBA, electronic signature)
-3. Completing **In-Person Appearance** notarization (venue, physical ID inspection, electronic signature)
-4. Issuing, downloading, and cryptographically verifying the **Signing Certificate**
+- **[Video Walkthrough: `docs/veriseal-notary-walkthrough.mp4`](docs/veriseal-notary-walkthrough.mp4)** — In-depth 1080p MP4 walkthrough covering pre-session setup, document upload, **Online (RON)** signing, **In-Person** appearance signing, electronic journaling, and cryptographic certificate verification.
+- **[Illustrated Step-by-Step Guide: `docs/HOW_TO_SIGN.md`](docs/HOW_TO_SIGN.md)** covering:
+  1. Uploading documents & selecting **Online (RON)** vs. **In-Person** mode
+  2. Completing **Remote Online Notarization** (A/V session, KBA, electronic signature)
+  3. Completing **In-Person Appearance** notarization (venue, physical ID inspection, electronic signature)
+  4. Issuing, downloading, and cryptographically verifying the **Signing Certificate**
 
 ![VeriSeal Upload and Mode Selection](src/assets/images/guide_upload_mode_1794539702442.jpg)
 
@@ -71,7 +72,9 @@ cd <your-repo>
 ### 2. Install dependencies
 
 ```bash
-npm install
+npm install --legacy-peer-deps
+# or, if you have Bun installed:
+# bun install
 ```
 
 ### 3. Configure Environment & Firebase
@@ -118,6 +121,8 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 | `npm run dev` | Start the Vite development server on port `3000` |
 | `npm run build` | Build the production bundle into `dist/` |
 | `npm run preview` | Preview the production build locally |
+| `npm run update` | Pull latest Git changes (if clean), sync dependencies, type-check, and rebuild with a fresh `/version.json` |
+| `npm run update -- --rules` | Run `npm run update` plus lint and deploy `firestore.rules` via Firebase CLI |
 | `npm run lint` | Run TypeScript type checking (`tsc --noEmit`) |
 | `npx eslint firestore.rules` | Lint Firestore security rules |
 | `npm run clean` | Remove `dist/` and temporary build artifacts |

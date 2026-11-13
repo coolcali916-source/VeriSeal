@@ -219,6 +219,10 @@
         "includeNotarizedMark": {
           "type": "boolean"
         },
+        "placement": {
+          "type": "object",
+          "description": "Signature and notary stamp coordinates (page, xPct, yPct, scale) on the uploaded document."
+        },
         "certificateCode": {
           "type": "string",
           "maxLength": 40

@@ -17,15 +17,18 @@ import {
   VideoOff,
 } from 'lucide-react';
 import { downloadSigningCertificateHtml } from '../lib/certificateExport';
-import type {
-  CustodyEvent,
-  NotarizationCase,
-  NotarizationMode,
-  SignatureType,
-  UserProfile,
+import {
+  DEFAULT_DOCUMENT_PLACEMENT,
+  type CustodyEvent,
+  type DocumentPlacement,
+  type NotarizationCase,
+  type NotarizationMode,
+  type SignatureType,
+  type UserProfile,
 } from '../types/notary';
 import { KBA_QUESTIONS } from '../lib/templates';
 import { formatFileSize } from '../lib/documentParser';
+import { InteractiveDocumentCanvas } from './InteractiveDocumentCanvas';
 import { NotarySealSvg } from './NotarySealSvg';
 import {
   VeriSealCertifiedLogo,
@@ -66,6 +69,10 @@ interface SigningRoomViewProps {
     includeCertifiedLogo: boolean,
     includeNotarizedMark: boolean
   ) => Promise<void>;
+  onUpdatePlacement: (
+    caseId: string,
+    placement: DocumentPlacement
+  ) => Promise<void>;
   onNavigateVerify: (certificateCode: string) => void;
   onNavigateStampTool: () => void;
 }
@@ -80,12 +87,13 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
   onApplySignature,
   onNotarizeCase,
   onToggleEmblems,
+  onUpdatePlacement,
   onNavigateVerify,
   onNavigateStampTool,
 }) => {
   const [canvasTab, setCanvasTab] = useState<
     'instrument' | 'certificate' | 'file' | 'custody'
-  >('instrument');
+  >('file');
   const [copiedCode, setCopiedCode] = useState(false);
   const [idMethod, setIdMethod] = useState('Government Photo ID + KBA');
   const [venueInput, setVenueInput] = useState('San Francisco County, CA');
@@ -99,8 +107,10 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
   });
   const [credentialAnalyzed, setCredentialAnalyzed] = useState(false);
 
-  // Signature Pad State
+  // Signature Pad State & Workflow Card Refs
   const sigCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const step2Ref = useRef<HTMLDivElement | null>(null);
+  const step3Ref = useRef<HTMLDivElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasDrawnStroke, setHasDrawnStroke] = useState(false);
   const [sigMode, setSigMode] = useState<'drawn' | 'typed'>('drawn');
@@ -149,7 +159,7 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
       if (activeCase.status === 'notarized') {
         setCanvasTab('certificate');
       } else {
-        setCanvasTab('instrument');
+        setCanvasTab('file');
       }
     }
   }, [
@@ -451,6 +461,17 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
             <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-md">
               <button
                 type="button"
+                onClick={() => setCanvasTab('file')}
+                className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer ${
+                  canvasTab === 'file'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Document &amp; Placement
+              </button>
+              <button
+                type="button"
                 onClick={() => setCanvasTab('instrument')}
                 className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer ${
                   canvasTab === 'instrument'
@@ -458,7 +479,7 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Document Sheet
+                Summary Sheet
               </button>
               <button
                 type="button"
@@ -471,17 +492,6 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
               >
                 <Award className="w-3.5 h-3.5" />
                 Signing Certificate
-              </button>
-              <button
-                type="button"
-                onClick={() => setCanvasTab('file')}
-                className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer ${
-                  canvasTab === 'file'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Source File
               </button>
               <button
                 type="button"
@@ -878,43 +888,30 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
           )}
 
           {canvasTab === 'file' && (
-            <div className="p-6 bg-slate-50 min-h-[520px] flex flex-col">
-              {previewObjectUrl && activeCase.fileType === 'application/pdf' ? (
-                <iframe
-                  src={previewObjectUrl}
-                  title={activeCase.fileName}
-                  className="w-full h-[540px] border border-slate-200 rounded bg-white"
-                />
-              ) : previewObjectUrl && activeCase.fileType.startsWith('image/') ? (
-                <div className="flex-1 flex items-center justify-center bg-white border border-slate-200 rounded p-4">
-                  <img
-                    src={previewObjectUrl}
-                    alt={activeCase.fileName}
-                    referrerPolicy="no-referrer"
-                    className="max-h-[500px] w-auto object-contain"
-                  />
-                </div>
-              ) : (
-                <div className="bg-white border border-slate-200 rounded p-6 space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900">
-                        {activeCase.fileName}
-                      </div>
-                      <div className="text-xs text-slate-500 tabular-nums">
-                        {activeCase.fileType} · {formatFileSize(activeCase.fileSize)}
-                      </div>
-                    </div>
-                    <span className="font-mono text-xs text-slate-500 tabular-nums">
-                      SHA-256: {activeCase.documentHash.slice(0, 16)}…
-                    </span>
-                  </div>
-                  <pre className="text-xs font-mono text-slate-700 whitespace-pre-wrap leading-relaxed max-h-[420px] overflow-y-auto">
-                    {activeCase.documentText}
-                  </pre>
-                </div>
-              )}
-            </div>
+            <InteractiveDocumentCanvas
+              activeCase={activeCase}
+              previewObjectUrl={previewObjectUrl}
+              userProfile={userProfile}
+              useCustomStamp={useCustomStamp}
+              includeCertifiedLogo={includeCertifiedLogo}
+              includeNotarizedMark={includeNotarizedMark}
+              placement={activeCase.placement || DEFAULT_DOCUMENT_PLACEMENT}
+              onChangePlacement={(next) =>
+                void onUpdatePlacement(activeCase.id, next)
+              }
+              onJumpToSignStep={() =>
+                step2Ref.current?.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'center',
+                })
+              }
+              onJumpToSealStep={() =>
+                step3Ref.current?.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'center',
+                })
+              }
+            />
           )}
 
           {canvasTab === 'custody' && (
@@ -1300,7 +1297,10 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
         </div>
 
         {/* Step 2: Electronic Signature Pad */}
-        <div className="border border-slate-200 bg-white rounded-lg p-5 space-y-4">
+        <div
+          ref={step2Ref}
+          className="border border-slate-200 bg-white rounded-lg p-5 space-y-4"
+        >
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-900">
               2. Signer Electronic Signature
@@ -1403,7 +1403,10 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
         </div>
 
         {/* Step 3: Notary Digital Signature, Transparent Stamp & Timestamp */}
-        <div className="border border-slate-200 bg-white rounded-lg p-5 space-y-4">
+        <div
+          ref={step3Ref}
+          className="border border-slate-200 bg-white rounded-lg p-5 space-y-4"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Stamp className="w-4 h-4 text-blue-800" />
