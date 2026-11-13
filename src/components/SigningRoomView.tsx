@@ -362,6 +362,33 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
     }
   };
 
+  const handleApplySavedProfileSignature = async () => {
+    if (
+      !userProfile.savedSignatureData ||
+      !userProfile.savedSignatureType ||
+      userProfile.savedSignatureType === 'none'
+    ) {
+      return;
+    }
+    setRoomError('');
+    setBusyStep('sign');
+    try {
+      await onApplySignature(
+        activeCase.id,
+        userProfile.savedSignatureData,
+        userProfile.savedSignatureType
+      );
+    } catch (err) {
+      setRoomError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to apply saved profile signature.'
+      );
+    } finally {
+      setBusyStep('');
+    }
+  };
+
   const handleEmblemToggle = async (
     nextCertified: boolean,
     nextNotarized: boolean
@@ -896,9 +923,15 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
               includeCertifiedLogo={includeCertifiedLogo}
               includeNotarizedMark={includeNotarizedMark}
               placement={activeCase.placement || DEFAULT_DOCUMENT_PLACEMENT}
-              onChangePlacement={(next) =>
-                void onUpdatePlacement(activeCase.id, next)
-              }
+              onChangePlacement={(next) => {
+                void onUpdatePlacement(activeCase.id, next).catch((err) => {
+                  setRoomError(
+                    err instanceof Error
+                      ? err.message
+                      : 'Could not save signature/stamp placement.'
+                  );
+                });
+              }}
               onJumpToSignStep={() =>
                 step2Ref.current?.scrollIntoView({
                   behavior: 'smooth',
@@ -1301,16 +1334,30 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
           ref={step2Ref}
           className="border border-slate-200 bg-white rounded-lg p-5 space-y-4"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-slate-900">
               2. Signer Electronic Signature
             </h3>
-            {activeCase.signatureType !== 'none' && (
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Signed
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {activeCase.status !== 'notarized' && (
+                <button
+                  type="button"
+                  onClick={onNavigateStampTool}
+                  className="text-[11px] font-medium text-blue-800 hover:underline cursor-pointer"
+                >
+                  {userProfile.savedSignatureData &&
+                  userProfile.savedSignatureType !== 'none'
+                    ? 'Edit Saved Signature'
+                    : 'Create in Profile'}
+                </button>
+              )}
+              {activeCase.signatureType !== 'none' && (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Signed
+                </span>
+              )}
+            </div>
           </div>
 
           {activeCase.status === 'draft' ? (
@@ -1320,6 +1367,42 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
           ) : activeCase.status === 'identity_verified' ||
             activeCase.status === 'signed' ? (
             <>
+              {userProfile.savedSignatureData &&
+                userProfile.savedSignatureType &&
+                userProfile.savedSignatureType !== 'none' && (
+                  <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-md space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-blue-950">
+                        Saved Profile Signature
+                      </span>
+                      <button
+                        type="button"
+                        disabled={busyStep === 'sign'}
+                        onClick={() => void handleApplySavedProfileSignature()}
+                        className="px-3 py-1 text-[11px] font-semibold text-white bg-blue-800 rounded hover:bg-blue-900 disabled:opacity-50 cursor-pointer"
+                      >
+                        {busyStep === 'sign'
+                          ? 'Applying...'
+                          : 'Use Saved Signature'}
+                      </button>
+                    </div>
+                    <div className="h-14 rounded bg-white border border-blue-100 flex items-center justify-center px-3 overflow-hidden">
+                      {userProfile.savedSignatureType === 'drawn' ? (
+                        <img
+                          src={userProfile.savedSignatureData}
+                          alt="Saved profile signature"
+                          draggable={false}
+                          referrerPolicy="no-referrer"
+                          className="max-h-12 w-auto object-contain"
+                        />
+                      ) : (
+                        <span className="text-xl italic font-serif text-slate-900 truncate">
+                          {userProfile.savedSignatureData}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
               <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-md">
                 <button
                   type="button"

@@ -81,7 +81,8 @@ service cloud.firestore {
         data.keys().hasOnly([
           'uid', 'displayName', 'email', 'phone', 'location',
           'commissionNumber', 'commissionJurisdiction', 'commissionExpires',
-          'customStampDataUrl', 'createdAt', 'updatedAt'
+          'customStampDataUrl', 'savedSignatureData', 'savedSignatureType',
+          'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.uid) &&
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
@@ -92,6 +93,8 @@ service cloud.firestore {
         data.commissionJurisdiction is string && data.commissionJurisdiction.size() <= 60 &&
         data.commissionExpires is string && data.commissionExpires.size() <= 30 &&
         data.customStampDataUrl is string && data.customStampDataUrl.size() <= 180000 &&
+        (!('savedSignatureData' in data) || (data.savedSignatureData is string && data.savedSignatureData.size() <= 150000)) &&
+        (!('savedSignatureType' in data) || isValidSignatureType(data.savedSignatureType)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -294,7 +297,8 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly([
           'displayName', 'email', 'phone', 'location',
-          'commissionNumber', 'commissionJurisdiction', 'commissionExpires', 'customStampDataUrl', 'updatedAt'
+          'commissionNumber', 'commissionJurisdiction', 'commissionExpires',
+          'customStampDataUrl', 'savedSignatureData', 'savedSignatureType', 'updatedAt'
         ]);
       allow delete: if isAdmin();
     }

@@ -13,7 +13,8 @@ import {
   CURRENT_APP_BUILD,
   type AppVersionManifest,
 } from '../lib/appUpdater';
-import type { NotarizationCase, UserProfile } from '../types/notary';
+import type { NotarizationCase, SignatureType, UserProfile } from '../types/notary';
+import { ProfileSignatureTool } from './ProfileSignatureTool';
 import { StampUploaderTool } from './StampUploaderTool';
 
 interface ProfileViewProps {
@@ -74,6 +75,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   const handleSaveStamp = async (stampDataUrl: string) => {
     const next = { ...form, customStampDataUrl: stampDataUrl };
+    setForm(next);
+    await onSaveProfile(next);
+  };
+
+  const handleSaveSignature = async (
+    signatureData: string,
+    signatureType: SignatureType
+  ) => {
+    const next = {
+      ...form,
+      savedSignatureData: signatureData,
+      savedSignatureType: signatureType,
+    };
     setForm(next);
     await onSaveProfile(next);
   };
@@ -309,6 +323,15 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </button>
         </div>
       </form>
+
+      {/* Saved Electronic Signature Studio */}
+      <ProfileSignatureTool
+        displayName={form.displayName}
+        currentSignatureData={form.savedSignatureData || ''}
+        currentSignatureType={form.savedSignatureType || 'none'}
+        onSaveSignature={handleSaveSignature}
+        saving={saving}
+      />
 
       {/* Transparent Notary Stamp Upload & Processor */}
       <StampUploaderTool

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   collection,
@@ -123,6 +123,8 @@ const DEFAULT_PROFILE: UserProfile = {
   commissionJurisdiction: 'State of California',
   commissionExpires: '2028-09-30',
   customStampDataUrl: '',
+  savedSignatureData: '',
+  savedSignatureType: 'none',
 };
 
 export default function App() {
@@ -149,6 +151,9 @@ export default function App() {
   >({});
   const [previewUrlsByCase, setPreviewUrlsByCase] = useState<
     Record<string, string>
+  >({});
+  const pendingPlacementByCaseRef = useRef<
+    Record<string, { placement: DocumentPlacement; ts: number }>
   >({});
 
   // App Update State
@@ -459,6 +464,8 @@ export default function App() {
             commissionJurisdiction: 'State of California',
             commissionExpires: '2028-09-30',
             customStampDataUrl: '',
+            savedSignatureData: '',
+            savedSignatureType: 'none',
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -473,6 +480,10 @@ export default function App() {
       (snap) => {
         if (snap.exists()) {
           const d = snap.data();
+          const sigType =
+            d.savedSignatureType === 'drawn' || d.savedSignatureType === 'typed'
+              ? d.savedSignatureType
+              : 'none';
           setUserProfile({
             uid: String(d.uid),
             displayName: String(d.displayName || ''),
@@ -483,6 +494,8 @@ export default function App() {
             commissionJurisdiction: String(d.commissionJurisdiction || ''),
             commissionExpires: String(d.commissionExpires || ''),
             customStampDataUrl: String(d.customStampDataUrl || ''),
+            savedSignatureData: String(d.savedSignatureData || ''),
+            savedSignatureType: sigType,
             createdAtIso: tsToIso(d.createdAt),
             updatedAtIso: tsToIso(d.updatedAt),
           });
@@ -574,7 +587,22 @@ export default function App() {
             notaryStampDataUrl: String(d.notaryStampDataUrl || ''),
             includeCertifiedLogo: d.includeCertifiedLogo !== false,
             includeNotarizedMark: d.includeNotarizedMark !== false,
-            placement: parsePlacement(d.placement) || DEFAULT_DOCUMENT_PLACEMENT,
+            placement: (() => {
+              const serverPlacement =
+                parsePlacement(d.placement) || DEFAULT_DOCUMENT_PLACEMENT;
+              const pending = pendingPlacementByCaseRef.current[docSnap.id];
+              if (pending && Date.now() - pending.ts < 3000) {
+                if (
+                  JSON.stringify(serverPlacement) ===
+                  JSON.stringify(pending.placement)
+                ) {
+                  delete pendingPlacementByCaseRef.current[docSnap.id];
+                  return serverPlacement;
+                }
+                return pending.placement;
+              }
+              return serverPlacement;
+            })(),
             certificateCode: String(d.certificateCode || ''),
             sealedHash: String(d.sealedHash || ''),
             signatureAlgorithm: String(d.signatureAlgorithm || ''),
@@ -780,8 +808,52 @@ export default function App() {
       }));
     }
     if (payload.uploadedFile) {
-      void saveLocalDocumentFile(caseId, payload.documentHash, payload.uploadedFile);
+      await saveLocalDocumentFile(caseId, payload.documentHash, payload.uploadedFile);
     }
+
+    const optimisticCase: NotarizationCase = {
+      id: caseId,
+      ownerId: firebaseUser?.uid || 'local_preview',
+      folderId: payload.folderId || 'unfiled',
+      title: payload.title,
+      fileName: payload.fileName,
+      fileType: payload.fileType,
+      fileSize: payload.fileSize,
+      actType: payload.actType,
+      notarizationMode: payload.notarizationMode,
+      meetingLocation: payload.meetingLocation,
+      status: 'draft',
+      signerName: payload.signerName,
+      signerEmail: payload.signerEmail,
+      documentText: payload.documentText,
+      documentHash: payload.documentHash,
+      idMethod:
+        payload.notarizationMode === 'in_person'
+          ? 'Physical Government Photo ID'
+          : 'Government Photo ID + KBA',
+      idScore: 0,
+      kbaPassed: false,
+      signerSignatureData: '',
+      signatureType: 'none',
+      notaryName: '',
+      notaryCommission: '',
+      notaryJurisdiction: '',
+      notaryExpires: '',
+      notaryStampDataUrl: '',
+      includeCertifiedLogo: payload.includeCertifiedLogo,
+      includeNotarizedMark: payload.includeNotarizedMark,
+      placement: DEFAULT_DOCUMENT_PLACEMENT,
+      certificateCode: '',
+      sealedHash: '',
+      signatureAlgorithm: '',
+      publicKeyJwk: '',
+      digitalSignature: '',
+      signedPayload: '',
+      timestampIso: '',
+      feeCents: payload.feeCents,
+      createdAtIso: nowIso,
+      updatedAtIso: nowIso,
+    };
 
     if (firebaseUser) {
       const uid = firebaseUser.uid;
@@ -843,54 +915,14 @@ export default function App() {
           recordedAt: serverTimestamp(),
         });
         await batch.commit();
+        setCases((prev) =>
+          prev.some((c) => c.id === caseId) ? prev : [optimisticCase, ...prev]
+        );
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `notarizations/${caseId}`);
       }
     } else {
-      const newCase: NotarizationCase = {
-        id: caseId,
-        ownerId: 'local_preview',
-        folderId: payload.folderId || 'unfiled',
-        title: payload.title,
-        fileName: payload.fileName,
-        fileType: payload.fileType,
-        fileSize: payload.fileSize,
-        actType: payload.actType,
-        notarizationMode: payload.notarizationMode,
-        meetingLocation: payload.meetingLocation,
-        status: 'draft',
-        signerName: payload.signerName,
-        signerEmail: payload.signerEmail,
-        documentText: payload.documentText,
-        documentHash: payload.documentHash,
-        idMethod:
-          payload.notarizationMode === 'in_person'
-            ? 'Physical Government Photo ID'
-            : 'Government Photo ID + KBA',
-        idScore: 0,
-        kbaPassed: false,
-        signerSignatureData: '',
-        signatureType: 'none',
-        notaryName: '',
-        notaryCommission: '',
-        notaryJurisdiction: '',
-        notaryExpires: '',
-        notaryStampDataUrl: '',
-        includeCertifiedLogo: payload.includeCertifiedLogo,
-        includeNotarizedMark: payload.includeNotarizedMark,
-        placement: DEFAULT_DOCUMENT_PLACEMENT,
-        certificateCode: '',
-        sealedHash: '',
-        signatureAlgorithm: '',
-        publicKeyJwk: '',
-        digitalSignature: '',
-        signedPayload: '',
-        timestampIso: '',
-        feeCents: payload.feeCents,
-        createdAtIso: nowIso,
-        updatedAtIso: nowIso,
-      };
-      setCases((prev) => [newCase, ...prev]);
+      setCases((prev) => [optimisticCase, ...prev]);
       setCustodyByCase((prev) => ({
         ...prev,
         [caseId]: [
@@ -1169,10 +1201,36 @@ export default function App() {
     const target = cases.find((c) => c.id === caseId);
     if (!target || target.status === 'notarized') return;
 
+    const sanitizeBox = (box: DocumentPlacement['signature']) => ({
+      page: Math.max(1, Math.min(500, Math.round(Number(box.page) || 1))),
+      xPct: Math.max(
+        0,
+        Math.min(100, Math.round((Number(box.xPct) || 50) * 10) / 10)
+      ),
+      yPct: Math.max(
+        0,
+        Math.min(100, Math.round((Number(box.yPct) || 50) * 10) / 10)
+      ),
+      scale: Math.max(
+        0.4,
+        Math.min(2.5, Math.round((Number(box.scale) || 1) * 100) / 100)
+      ),
+    });
+
+    const sanitized: DocumentPlacement = {
+      signature: sanitizeBox(placement.signature),
+      stamp: sanitizeBox(placement.stamp),
+    };
+
+    pendingPlacementByCaseRef.current[caseId] = {
+      placement: sanitized,
+      ts: Date.now(),
+    };
+
     setCases((prev) =>
       prev.map((c) =>
         c.id === caseId
-          ? { ...c, placement, updatedAtIso: new Date().toISOString() }
+          ? { ...c, placement: sanitized, updatedAtIso: new Date().toISOString() }
           : c
       )
     );
@@ -1180,10 +1238,11 @@ export default function App() {
     if (firebaseUser) {
       try {
         await updateDoc(doc(db, 'notarizations', caseId), {
-          placement,
+          placement: sanitized,
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
+        delete pendingPlacementByCaseRef.current[caseId];
         handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
       }
     }
@@ -1418,6 +1477,13 @@ export default function App() {
   };
 
   const handleSaveProfile = async (next: UserProfile) => {
+    const sigType: SignatureType =
+      next.savedSignatureType === 'drawn' || next.savedSignatureType === 'typed'
+        ? next.savedSignatureType
+        : 'none';
+    const sigData =
+      sigType === 'none' ? '' : String(next.savedSignatureData || '').slice(0, 150000);
+
     if (firebaseUser) {
       const uid = firebaseUser.uid;
       try {
@@ -1430,13 +1496,19 @@ export default function App() {
           commissionJurisdiction: next.commissionJurisdiction.trim(),
           commissionExpires: next.commissionExpires.trim(),
           customStampDataUrl: next.customStampDataUrl,
+          savedSignatureData: sigData,
+          savedSignatureType: sigType,
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `userProfiles/${uid}`);
       }
     } else {
-      setUserProfile(next);
+      setUserProfile({
+        ...next,
+        savedSignatureData: sigData,
+        savedSignatureType: sigType,
+      });
     }
   };
 
@@ -1485,7 +1557,7 @@ export default function App() {
     signing_room: activeCase ? `Signing Room / ${activeCase.title}` : 'Signing Room',
     journal: 'Statutory Electronic Journal',
     verify: 'Public Certificate Verification',
-    profile: 'Profile & Transparent Stamp Studio',
+    profile: 'Profile, Signature & Stamp Studio',
   };
 
   return (

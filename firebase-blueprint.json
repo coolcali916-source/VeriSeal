@@ -44,6 +44,14 @@
           "type": "string",
           "maxLength": 180000
         },
+        "savedSignatureData": {
+          "type": "string",
+          "maxLength": 150000
+        },
+        "savedSignatureType": {
+          "type": "string",
+          "enum": ["none", "drawn", "typed"]
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"

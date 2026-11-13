@@ -39,6 +39,8 @@ export interface UserProfile {
   commissionJurisdiction: string;
   commissionExpires: string;
   customStampDataUrl: string;
+  savedSignatureData?: string;
+  savedSignatureType?: SignatureType;
   createdAtIso?: string;
   updatedAtIso?: string;
 }

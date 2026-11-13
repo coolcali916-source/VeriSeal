@@ -95,6 +95,7 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
   defaultSignerEmail,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const intakeFormRef = useRef<HTMLFormElement | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | NotarizationStatus>('all');
   const [modeFilter, setModeFilter] = useState<'all' | NotarizationMode>('all');
@@ -154,6 +155,12 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
         setSignerEmail(defaultSignerEmail);
       }
       setShowIntake(true);
+      requestAnimationFrame(() => {
+        intakeFormRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+        });
+      });
     } catch (err) {
       setIntakeError(
         err instanceof Error ? err.message : 'Could not read uploaded file.'
@@ -412,9 +419,32 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
 
         {showIntake && (
           <form
+            ref={intakeFormRef}
             onSubmit={handleCreateSubmit}
             className="mt-6 pt-6 border-t border-slate-200 space-y-4"
           >
+            {fileName && (
+              <div className="p-3.5 rounded-md border border-blue-200 bg-blue-50/70 flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-blue-950 truncate">
+                    Ready to Open: {fileName} ({formatFileSize(fileSize)})
+                  </div>
+                  <div className="text-[11px] text-blue-800">
+                    Review details below or click now to open the document and place the signature and notary stamp.
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-blue-800 rounded-md hover:bg-blue-900 disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {submitting
+                    ? 'Opening Document...'
+                    : 'Open Document to Sign & Stamp'}
+                </button>
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium text-slate-500 mr-1">
                 Load Legal Template:

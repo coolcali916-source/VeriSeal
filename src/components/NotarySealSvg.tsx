@@ -29,8 +29,9 @@ export const NotarySealSvg: React.FC<NotarySealSvgProps> = ({
           <img
             src={customStampDataUrl}
             alt={`Official transparent notary stamp for ${notaryName}`}
+            draggable={false}
             referrerPolicy="no-referrer"
-            className="max-w-full max-h-full object-contain pointer-events-none"
+            className="max-w-full max-h-full object-contain pointer-events-none select-none"
           />
         </div>
         {certificateCode && (
@@ -59,6 +60,7 @@ export const NotarySealSvg: React.FC<NotarySealSvgProps> = ({
         xmlns="http://www.w3.org/2000/svg"
         role="img"
         aria-label={`Electronic Notary Seal for ${cleanName}, Commission ${cleanComm}`}
+        className="pointer-events-none select-none"
       >
         <defs>
           <path
