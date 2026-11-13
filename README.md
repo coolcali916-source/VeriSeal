@@ -30,6 +30,18 @@ VeriSeal is a web-based notarization platform built with **React**, **TypeScript
 
 ---
 
+## How-To Guide (In-Person & Remote Signing)
+
+See **[docs/HOW_TO_SIGN.md](docs/HOW_TO_SIGN.md)** for the full illustrated step-by-step walkthrough covering:
+1. Uploading documents & selecting **Online (RON)** vs. **In-Person** mode
+2. Completing **Remote Online Notarization** (A/V session, KBA, electronic signature)
+3. Completing **In-Person Appearance** notarization (venue, physical ID inspection, electronic signature)
+4. Issuing, downloading, and cryptographically verifying the **Signing Certificate**
+
+![VeriSeal Upload and Mode Selection](src/assets/images/guide_upload_mode_1794539702442.jpg)
+
+---
+
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS v4, Lucide Icons
@@ -86,7 +98,7 @@ npm install
 
 3. In the **Firebase Console**:
    - Enable **Authentication → Sign-in method → Google** (and optionally **Email/Password**).
-   - Add `localhost` to **Authentication → Settings → Authorized domains** if not already listed.
+   - Under **Authentication → Settings → Authorized domains**, ensure `localhost` as well as your preview or production hostnames (for example `*.run.app` or your custom domain) are authorized—without `https://` or port numbers. When running locally, open `http://localhost:3000` (or `http://localhost:3001`), **not** `http://127.0.0.1:...`, because Firebase Auth rejects IP addresses and port numbers.
    - Review and deploy `firestore.rules` to your Firestore database (using the Firebase CLI: `firebase deploy --only firestore:rules`).
 
 ### 4. Start the development server

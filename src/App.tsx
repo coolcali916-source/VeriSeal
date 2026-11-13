@@ -755,8 +755,8 @@ export default function App() {
           ownerId: uid,
           caseId,
           step: 'Document Uploaded & Hashed',
-          actor: payload.signerName,
-          details: `Ingested ${payload.fileName} (${
+          actor: payload.signerName.slice(0, 100),
+          details: `Ingested ${payload.fileName.slice(0, 150)} (${
             payload.notarizationMode === 'in_person' ? 'In-Person' : 'Online RON'
           })`,
           eventHash: evHash,

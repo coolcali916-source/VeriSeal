@@ -37,6 +37,24 @@ async function inflateRawBytes(compressed: Uint8Array): Promise<Uint8Array> {
   return merged;
 }
 
+export function truncateUtf8Bytes(input: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(input).byteLength <= maxBytes) {
+    return input;
+  }
+  let low = 0;
+  let high = input.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (encoder.encode(input.slice(0, mid)).byteLength <= maxBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return input.slice(0, low);
+}
+
 async function extractDocxText(buffer: ArrayBuffer): Promise<string> {
   try {
     const bytes = new Uint8Array(buffer);
@@ -55,11 +73,17 @@ async function extractDocxText(buffer: ArrayBuffer): Promise<string> {
       const fileNameLength = view.getUint16(offset + 26, true);
       const extraLength = view.getUint16(offset + 28, true);
       const nameStart = offset + 30;
+      const dataStart = nameStart + fileNameLength + extraLength;
+      if (dataStart > bytes.length) break;
+
       const nameBytes = bytes.slice(nameStart, nameStart + fileNameLength);
       const entryName = new TextDecoder().decode(nameBytes);
-      const dataStart = nameStart + fileNameLength + extraLength;
 
-      if (entryName === 'word/document.xml' && compressedSize > 0) {
+      if (
+        entryName === 'word/document.xml' &&
+        compressedSize > 0 &&
+        dataStart + compressedSize <= bytes.length
+      ) {
         const entryData = bytes.slice(dataStart, dataStart + compressedSize);
         const xmlBytes =
           compressionMethod === 8
@@ -76,14 +100,14 @@ async function extractDocxText(buffer: ArrayBuffer): Promise<string> {
           })
           .filter((line) => line.trim().length > 0);
         if (lines.length > 0) {
-          return lines.join('\n\n').slice(0, MAX_DOC_TEXT_LEN);
+          return truncateUtf8Bytes(lines.join('\n\n'), MAX_DOC_TEXT_LEN);
         }
       }
 
       if (compressedSize > 0) {
         offset = dataStart + compressedSize;
       } else {
-        offset += 30 + fileNameLength + extraLength;
+        offset = dataStart;
       }
     }
   } catch {
@@ -104,7 +128,7 @@ function extractReadablePdfStrings(buffer: ArrayBuffer): string {
         .replace(/\s+/g, ' ')
         .trim();
       if (cleaned.length > 30) {
-        return cleaned.slice(0, MAX_DOC_TEXT_LEN);
+        return truncateUtf8Bytes(cleaned, MAX_DOC_TEXT_LEN);
       }
     }
   } catch {
@@ -113,14 +137,20 @@ function extractReadablePdfStrings(buffer: ArrayBuffer): string {
   return '';
 }
 
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
+
 export async function parseUploadedFile(
   file: File
 ): Promise<ParsedUploadedDocument> {
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error('File exceeds the 100 MB maximum upload limit.');
+  }
+
   const buffer = await file.arrayBuffer();
   const documentHash = await sha256Hex(buffer);
   const previewObjectUrl = URL.createObjectURL(file);
   const lower = file.name.toLowerCase();
-  const fileType = file.type || inferMimeType(lower);
+  const fileType = (file.type || inferMimeType(lower) || 'application/octet-stream').trim();
 
   let extractedText = '';
 
@@ -129,9 +159,14 @@ export async function parseUploadedFile(
     lower.endsWith('.md') ||
     lower.endsWith('.csv') ||
     lower.endsWith('.json') ||
+    lower.endsWith('.xml') ||
+    lower.endsWith('.rtf') ||
     fileType.startsWith('text/')
   ) {
-    extractedText = new TextDecoder().decode(buffer).slice(0, MAX_DOC_TEXT_LEN);
+    extractedText = truncateUtf8Bytes(
+      new TextDecoder().decode(buffer),
+      MAX_DOC_TEXT_LEN
+    );
   } else if (lower.endsWith('.docx')) {
     extractedText = await extractDocxText(buffer);
   } else if (lower.endsWith('.pdf')) {
@@ -140,7 +175,7 @@ export async function parseUploadedFile(
 
   if (!extractedText.trim()) {
     extractedText = [
-      `Uploaded Binary Document: ${file.name}`,
+      `Uploaded Document: ${file.name}`,
       `MIME Type: ${fileType}`,
       `File Size: ${formatFileSize(file.size)} (${file.size} bytes)`,
       `SHA-256 Digest: ${documentHash}`,
@@ -150,11 +185,11 @@ export async function parseUploadedFile(
   }
 
   return {
-    fileName: file.name.slice(0, 180),
-    fileType: fileType.slice(0, 100),
+    fileName: truncateUtf8Bytes(file.name, 175) || 'uploaded_document',
+    fileType: truncateUtf8Bytes(fileType, 95) || 'application/octet-stream',
     fileSize: file.size,
     documentHash,
-    extractedText: extractedText.slice(0, MAX_DOC_TEXT_LEN),
+    extractedText: truncateUtf8Bytes(extractedText, MAX_DOC_TEXT_LEN),
     previewObjectUrl,
   };
 }
@@ -167,6 +202,7 @@ function inferMimeType(lowerName: string): string {
   if (lowerName.endsWith('.png')) return 'image/png';
   if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg'))
     return 'image/jpeg';
+  if (lowerName.endsWith('.webp')) return 'image/webp';
   if (lowerName.endsWith('.txt')) return 'text/plain';
   return 'application/octet-stream';
 }

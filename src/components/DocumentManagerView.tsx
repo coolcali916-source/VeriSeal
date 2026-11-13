@@ -15,10 +15,15 @@ import {
   type NotarizationCase,
   type NotarizationMode,
   type NotarizationStatus,
+  MAX_DOC_TEXT_LEN,
   MAX_FOLDER_NAME_LEN,
   MAX_TITLE_LEN,
 } from '../types/notary';
-import { formatFileSize, parseUploadedFile } from '../lib/documentParser';
+import {
+  formatFileSize,
+  parseUploadedFile,
+  truncateUtf8Bytes,
+} from '../lib/documentParser';
 import { sha256Hex } from '../lib/crypto';
 import { LEGAL_TEMPLATES } from '../lib/templates';
 import {
@@ -115,27 +120,43 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
   const [previewObjectUrl, setPreviewObjectUrl] = useState<string | undefined>(undefined);
   const [includeCertifiedLogo, setIncludeCertifiedLogo] = useState(true);
   const [includeNotarizedMark, setIncludeNotarizedMark] = useState(true);
+  const [parsingFile, setParsingFile] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [intakeError, setIntakeError] = useState('');
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
     setIntakeError('');
+    setParsingFile(true);
     try {
       const parsed = await parseUploadedFile(file);
-      const baseTitle = parsed.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
-      setTitle(baseTitle.slice(0, MAX_TITLE_LEN) || 'Uploaded Document');
+      const baseTitle = parsed.fileName
+        .replace(/\.[^.]+$/, '')
+        .replace(/[_-]+/g, ' ')
+        .trim();
+      setTitle(truncateUtf8Bytes(baseTitle || 'Uploaded Document', 135));
       setFileName(parsed.fileName);
       setFileType(parsed.fileType);
       setFileSize(parsed.fileSize);
       setDocumentText(parsed.extractedText);
       setDocumentHash(parsed.documentHash);
       setPreviewObjectUrl(parsed.previewObjectUrl);
+      if (defaultSignerName && (!signerName || signerName === 'Jordan M. Mercer')) {
+        setSignerName(defaultSignerName);
+      }
+      if (
+        defaultSignerEmail &&
+        (!signerEmail || signerEmail === 'signer@veriseal.example')
+      ) {
+        setSignerEmail(defaultSignerEmail);
+      }
       setShowIntake(true);
     } catch (err) {
       setIntakeError(
         err instanceof Error ? err.message : 'Could not read uploaded file.'
       );
+    } finally {
+      setParsingFile(false);
     }
   };
 
@@ -167,24 +188,40 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
     }
     setSubmitting(true);
     try {
-      const computedHash = documentHash || (await sha256Hex(documentText));
-      const finalFileName =
-        fileName || `${title.trim().replace(/\s+/g, '_')}.txt`;
+      const safeDocText = truncateUtf8Bytes(documentText.trim(), MAX_DOC_TEXT_LEN);
+      const safeTitle = truncateUtf8Bytes(title.trim(), 135) || 'Untitled Document';
+      const safeFileName =
+        truncateUtf8Bytes(
+          fileName || `${safeTitle.replace(/\s+/g, '_')}.txt`,
+          175
+        ) || 'document.txt';
+      const safeFileType = truncateUtf8Bytes(fileType || 'text/plain', 95);
+      const safeSignerName =
+        truncateUtf8Bytes(signerName.trim(), 95) || 'Principal Signer';
+      const rawEmail = signerEmail.trim();
+      const safeSignerEmail =
+        rawEmail.length >= 3
+          ? truncateUtf8Bytes(rawEmail, 115)
+          : 'signer@veriseal.example';
+      const safeLocation = truncateUtf8Bytes(
+        notarizationMode === 'in_person'
+          ? meetingLocation.trim() || 'In-Person Signing Office'
+          : 'Remote Audio-Video Session',
+        155
+      );
+      const computedHash = documentHash || (await sha256Hex(safeDocText));
       await onCreateCase({
-        title: title.trim().slice(0, MAX_TITLE_LEN),
+        title: safeTitle,
         folderId: folderId || 'unfiled',
-        fileName: finalFileName,
-        fileType: fileType || 'text/plain',
-        fileSize: fileSize || new Blob([documentText]).size,
+        fileName: safeFileName,
+        fileType: safeFileType,
+        fileSize: fileSize || new Blob([safeDocText]).size,
         actType,
         notarizationMode,
-        meetingLocation:
-          notarizationMode === 'in_person'
-            ? meetingLocation.trim() || 'In-Person Signing Office'
-            : 'Remote Audio-Video Session',
-        signerName: signerName.trim() || 'Principal Signer',
-        signerEmail: signerEmail.trim() || 'signer@veriseal.example',
-        documentText: documentText.trim(),
+        meetingLocation: safeLocation,
+        signerName: safeSignerName,
+        signerEmail: safeSignerEmail,
+        documentText: safeDocText,
         documentHash: computedHash,
         feeCents: actType === 'Acknowledgment' ? 2500 : 3000,
         includeCertifiedLogo,
@@ -332,11 +369,12 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
+              disabled={parsingFile}
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-md hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-md hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Upload className="w-3.5 h-3.5" />
-              Select File
+              {parsingFile ? 'Reading & Hashing...' : 'Select File'}
             </button>
             <button
               type="button"
@@ -349,12 +387,22 @@ export const DocumentManagerView: React.FC<DocumentManagerViewProps> = ({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.docx,.doc,.txt,.md,.csv,.png,.jpg,.jpeg"
+              accept=".pdf,.docx,.doc,.txt,.md,.csv,.json,.rtf,.xml,.png,.jpg,.jpeg,.webp,application/pdf,text/*,image/*"
               className="hidden"
-              onChange={(e) => void handleFile(e.target.files?.[0])}
+              onChange={(e) => {
+                const selected = e.target.files?.[0];
+                e.target.value = '';
+                void handleFile(selected);
+              }}
             />
           </div>
         </div>
+
+        {intakeError && !showIntake && (
+          <div className="mt-4 px-3.5 py-2.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md">
+            {intakeError}
+          </div>
+        )}
 
         {showIntake && (
           <form

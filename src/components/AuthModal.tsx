@@ -30,6 +30,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
   const formatAuthError = (err: unknown): string => {
     const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('auth/unauthorized-domain')) {
+      const host =
+        typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+      const port =
+        typeof window !== 'undefined' && window.location.port
+          ? `:${window.location.port}`
+          : '';
+      if (host === '127.0.0.1' || host === '0.0.0.0') {
+        return `Firebase Auth does not allow raw IP addresses (${host}) in Authorized domains. Open http://localhost${port} in your browser instead (localhost works on any port without adding a domain).`;
+      }
+      return `The domain "${host}" is not authorized for Firebase Sign-In. Add "${host}" (without https:// or port number) in Firebase Console -> Authentication -> Settings -> Authorized domains.`;
+    }
     if (msg.includes('auth/operation-not-allowed')) {
       return 'Email/Password sign-in is not yet enabled in Firebase Console (Authentication -> Sign-in method -> Email/Password). Use "Continue with Google" below or enable Email/Password in your Firebase Console.';
     }
