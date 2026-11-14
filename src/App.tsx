@@ -69,7 +69,11 @@ import {
   checkForAppUpdate,
   clearUpdateQueryParam,
   CURRENT_APP_BUILD,
+  getSavedGitHubTarget,
+  runGitHubAppUpdate,
+  saveGitHubConfigOnServer,
   type AppVersionManifest,
+  type GitHubUpdateStatus,
 } from './lib/appUpdater';
 
 function makeId(prefix: string): string {
@@ -155,15 +159,34 @@ export default function App() {
   const pendingPlacementByCaseRef = useRef<
     Record<string, { placement: DocumentPlacement; ts: number }>
   >({});
+  const pendingModeByCaseRef = useRef<
+    Record<
+      string,
+      {
+        notarizationMode: NotarizationMode;
+        meetingLocation: string;
+        ts: number;
+      }
+    >
+  >({});
 
   // App Update State
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [remoteBuild, setRemoteBuild] = useState<AppVersionManifest | null>(null);
+  const [githubStatus, setGithubStatus] = useState<GitHubUpdateStatus | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updatingApp, setUpdatingApp] = useState(false);
   const [updateNotice, setUpdateNotice] = useState('');
+  const [updateError, setUpdateError] = useState('');
+  const [showGitHubModal, setShowGitHubModal] = useState(false);
+  const [githubRepoInput, setGithubRepoInput] = useState(
+    () => getSavedGitHubTarget().repo || ''
+  );
+  const [githubBranchInput, setGithubBranchInput] = useState(
+    () => getSavedGitHubTarget().branch || 'main'
+  );
 
-  // Clean _upd param & poll /version.json for new deployments
+  // Clean _upd param & poll GitHub / /version.json for new deployments
   useEffect(() => {
     clearUpdateQueryParam();
     let lastChecked = 0;
@@ -175,6 +198,15 @@ export default function App() {
       const result = await checkForAppUpdate();
       if (result.remoteBuild) {
         setRemoteBuild(result.remoteBuild);
+      }
+      if (result.githubStatus) {
+        setGithubStatus(result.githubStatus);
+        if (result.githubStatus.repoSlug && !githubRepoInput) {
+          setGithubRepoInput(result.githubStatus.repoSlug);
+        }
+        if (result.githubStatus.branch) {
+          setGithubBranchInput(result.githubStatus.branch);
+        }
       }
       if (result.updateAvailable) {
         setUpdateAvailable(true);
@@ -567,9 +599,30 @@ export default function App() {
             fileType: String(d.fileType),
             fileSize: Number(d.fileSize || 0),
             actType: d.actType as NotarialActType,
-            notarizationMode:
-              d.notarizationMode === 'in_person' ? 'in_person' : 'online',
-            meetingLocation: String(d.meetingLocation || ''),
+            notarizationMode: (() => {
+              const serverMode: NotarizationMode =
+                d.notarizationMode === 'in_person' ? 'in_person' : 'online';
+              const pending = pendingModeByCaseRef.current[docSnap.id];
+              if (pending && Date.now() - pending.ts < 8000) {
+                if (
+                  !docSnap.metadata.hasPendingWrites &&
+                  serverMode === pending.notarizationMode
+                ) {
+                  delete pendingModeByCaseRef.current[docSnap.id];
+                  return serverMode;
+                }
+                return pending.notarizationMode;
+              }
+              return serverMode;
+            })(),
+            meetingLocation: (() => {
+              const serverLoc = String(d.meetingLocation || '');
+              const pending = pendingModeByCaseRef.current[docSnap.id];
+              if (pending && Date.now() - pending.ts < 8000) {
+                return pending.meetingLocation;
+              }
+              return serverLoc;
+            })(),
             status: d.status,
             signerName: String(d.signerName),
             signerEmail: String(d.signerEmail),
@@ -591,10 +644,11 @@ export default function App() {
               const serverPlacement =
                 parsePlacement(d.placement) || DEFAULT_DOCUMENT_PLACEMENT;
               const pending = pendingPlacementByCaseRef.current[docSnap.id];
-              if (pending && Date.now() - pending.ts < 3000) {
+              if (pending && Date.now() - pending.ts < 8000) {
                 if (
+                  !docSnap.metadata.hasPendingWrites &&
                   JSON.stringify(serverPlacement) ===
-                  JSON.stringify(pending.placement)
+                    JSON.stringify(pending.placement)
                 ) {
                   delete pendingPlacementByCaseRef.current[docSnap.id];
                   return serverPlacement;
@@ -1048,29 +1102,50 @@ export default function App() {
     mode: NotarizationMode,
     meetingLocation: string
   ) => {
-    if (firebaseUser) {
+    const target = cases.find((c) => c.id === caseId);
+    if (!target || target.status === 'notarized') return;
+
+    const rawLocation =
+      mode === 'in_person'
+        ? meetingLocation && meetingLocation !== 'Remote Audio-Video Session'
+          ? meetingLocation
+          : userProfile.location || 'San Francisco County, CA'
+        : 'Remote Audio-Video Session';
+    const normalizedLocation = rawLocation.trim().slice(0, 155) || 'San Francisco County, CA';
+
+    pendingModeByCaseRef.current[caseId] = {
+      notarizationMode: mode,
+      meetingLocation: normalizedLocation,
+      ts: Date.now(),
+    };
+
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === caseId
+          ? {
+              ...c,
+              notarizationMode: mode,
+              meetingLocation: normalizedLocation,
+              updatedAtIso: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+
+    if (firebaseUser && !caseId.startsWith('case_demo_')) {
       try {
         await updateDoc(doc(db, 'notarizations', caseId), {
           notarizationMode: mode,
-          meetingLocation,
+          meetingLocation: normalizedLocation,
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
+        delete pendingModeByCaseRef.current[caseId];
+        setCases((prev) =>
+          prev.map((c) => (c.id === caseId ? target : c))
+        );
         handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
       }
-    } else {
-      setCases((prev) =>
-        prev.map((c) =>
-          c.id === caseId
-            ? {
-                ...c,
-                notarizationMode: mode,
-                meetingLocation,
-                updatedAtIso: new Date().toISOString(),
-              }
-            : c
-        )
-      );
     }
   };
 
@@ -1081,36 +1156,49 @@ export default function App() {
     meetingLocation: string
   ) => {
     const target = cases.find((c) => c.id === caseId);
-    if (!target) return;
-    if (firebaseUser) {
+    if (!target || target.status === 'notarized') return;
+
+    const safeIdMethod =
+      idMethod.trim().slice(0, 75) || 'Government Photo ID + KBA';
+    const safeScore = Math.max(80, Math.min(100, Math.round(Number(idScore) || 100)));
+    const safeLocation =
+      meetingLocation.trim().slice(0, 155) ||
+      (target.notarizationMode === 'in_person'
+        ? userProfile.location || 'San Francisco County, CA'
+        : 'Remote Audio-Video Session');
+
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === caseId
+          ? {
+              ...c,
+              status: 'identity_verified',
+              idMethod: safeIdMethod,
+              idScore: safeScore,
+              kbaPassed: true,
+              meetingLocation: safeLocation,
+              updatedAtIso: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+
+    if (firebaseUser && !caseId.startsWith('case_demo_')) {
       try {
         await updateDoc(doc(db, 'notarizations', caseId), {
           status: 'identity_verified',
-          idMethod,
-          idScore,
+          idMethod: safeIdMethod,
+          idScore: safeScore,
           kbaPassed: true,
-          meetingLocation,
+          meetingLocation: safeLocation,
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
+        setCases((prev) =>
+          prev.map((c) => (c.id === caseId ? target : c))
+        );
         handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
       }
-    } else {
-      setCases((prev) =>
-        prev.map((c) =>
-          c.id === caseId
-            ? {
-                ...c,
-                status: 'identity_verified',
-                idMethod,
-                idScore,
-                kbaPassed: true,
-                meetingLocation,
-                updatedAtIso: new Date().toISOString(),
-              }
-            : c
-        )
-      );
     }
     await appendCustodyEvent(
       caseId,
@@ -1118,7 +1206,7 @@ export default function App() {
         ? 'Physical Presence & ID Verified'
         : 'Identity & KBA Verified',
       target.signerName,
-      `${idMethod} (${meetingLocation}) verified at ${idScore}%`
+      `${safeIdMethod} (${safeLocation}) verified at ${safeScore}%`
     );
   };
 
@@ -1128,8 +1216,28 @@ export default function App() {
     signatureType: SignatureType
   ) => {
     const target = cases.find((c) => c.id === caseId);
-    if (!target) return;
-    if (firebaseUser) {
+    if (!target || target.status === 'notarized') return;
+    if (!signatureData || signatureData.length > 150000) {
+      throw new Error(
+        'Signature image is too large. Please draw a simpler stroke or use a typed signature.'
+      );
+    }
+
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === caseId
+          ? {
+              ...c,
+              status: 'signed',
+              signerSignatureData: signatureData,
+              signatureType,
+              updatedAtIso: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+
+    if (firebaseUser && !caseId.startsWith('case_demo_')) {
       try {
         await updateDoc(doc(db, 'notarizations', caseId), {
           status: 'signed',
@@ -1138,22 +1246,11 @@ export default function App() {
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
+        setCases((prev) =>
+          prev.map((c) => (c.id === caseId ? target : c))
+        );
         handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
       }
-    } else {
-      setCases((prev) =>
-        prev.map((c) =>
-          c.id === caseId
-            ? {
-                ...c,
-                status: 'signed',
-                signerSignatureData: signatureData,
-                signatureType,
-                updatedAtIso: new Date().toISOString(),
-              }
-            : c
-        )
-      );
     }
     await appendCustodyEvent(
       caseId,
@@ -1168,7 +1265,23 @@ export default function App() {
     includeCertifiedLogo: boolean,
     includeNotarizedMark: boolean
   ) => {
-    if (firebaseUser) {
+    const target = cases.find((c) => c.id === caseId);
+    if (!target || target.status === 'notarized') return;
+
+    setCases((prev) =>
+      prev.map((c) =>
+        c.id === caseId
+          ? {
+              ...c,
+              includeCertifiedLogo,
+              includeNotarizedMark,
+              updatedAtIso: new Date().toISOString(),
+            }
+          : c
+      )
+    );
+
+    if (firebaseUser && !caseId.startsWith('case_demo_')) {
       try {
         await updateDoc(doc(db, 'notarizations', caseId), {
           includeCertifiedLogo,
@@ -1176,21 +1289,11 @@ export default function App() {
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
+        setCases((prev) =>
+          prev.map((c) => (c.id === caseId ? target : c))
+        );
         handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
       }
-    } else {
-      setCases((prev) =>
-        prev.map((c) =>
-          c.id === caseId
-            ? {
-                ...c,
-                includeCertifiedLogo,
-                includeNotarizedMark,
-                updatedAtIso: new Date().toISOString(),
-              }
-            : c
-        )
-      );
     }
   };
 
@@ -1235,7 +1338,7 @@ export default function App() {
       )
     );
 
-    if (firebaseUser) {
+    if (firebaseUser && !caseId.startsWith('case_demo_')) {
       try {
         await updateDoc(doc(db, 'notarizations', caseId), {
           placement: sanitized,
@@ -1512,9 +1615,85 @@ export default function App() {
     }
   };
 
-  const handleUpdateApp = async (forceReload = false) => {
+  const handleConfigureGitHubRepo = async (
+    repo: string,
+    branch: string
+  ): Promise<boolean> => {
+    setUpdateError('');
     setUpdateNotice('');
+    try {
+      const res = await saveGitHubConfigOnServer(repo, branch);
+      if (!res.ok) {
+        setUpdateError(res.error || 'Could not save GitHub repository.');
+        return false;
+      }
+      if (res.repoSlug) setGithubRepoInput(res.repoSlug);
+      if (res.branch) setGithubBranchInput(res.branch);
+      const latestCheck = await checkForAppUpdate();
+      if (latestCheck.remoteBuild) setRemoteBuild(latestCheck.remoteBuild);
+      if (latestCheck.githubStatus) setGithubStatus(latestCheck.githubStatus);
+      setUpdateAvailable(latestCheck.updateAvailable);
+      setUpdateNotice(`Linked GitHub repository ${res.repoSlug} (${res.branch}).`);
+      return true;
+    } catch (err) {
+      setUpdateError(
+        err instanceof Error ? err.message : 'Unable to save GitHub config.'
+      );
+      return false;
+    }
+  };
+
+  const handlePullFromGitHub = async (force = false) => {
+    setUpdateError('');
+    setUpdateNotice('');
+    setUpdatingApp(true);
+    try {
+      const res = await runGitHubAppUpdate({
+        repo: githubRepoInput.trim() || undefined,
+        branch: githubBranchInput.trim() || undefined,
+        force,
+      });
+
+      if (!res.ok) {
+        if (res.needsRepoConfig) {
+          setShowGitHubModal(true);
+        }
+        setUpdateError(
+          res.error || 'Unable to pull update from GitHub.'
+        );
+        return;
+      }
+
+      if (res.updated) {
+        setUpdateAvailable(false);
+        setUpdateNotice(
+          `Updated from GitHub (${res.newShortCommit || 'latest'}${
+            res.commitMessage ? ` — ${res.commitMessage}` : ''
+          }). Reloading...`
+        );
+        await applyAppUpdate();
+      } else {
+        setUpdateAvailable(false);
+        setUpdateNotice(
+          `Already on the latest GitHub commit${
+            res.newShortCommit ? ` (${res.newShortCommit})` : ''
+          }.`
+        );
+      }
+    } finally {
+      setUpdatingApp(false);
+    }
+  };
+
+  const handleUpdateApp = async (forceReload = false) => {
+    setUpdateError('');
+    setUpdateNotice('');
+
     if (forceReload || updateAvailable) {
+      if (githubStatus?.repoConfigured) {
+        await handlePullFromGitHub(forceReload);
+        return;
+      }
       setUpdatingApp(true);
       await applyAppUpdate();
       return;
@@ -1526,13 +1705,41 @@ export default function App() {
       if (result.remoteBuild) {
         setRemoteBuild(result.remoteBuild);
       }
+      if (result.githubStatus) {
+        setGithubStatus(result.githubStatus);
+        if (result.githubStatus.repoSlug) {
+          setGithubRepoInput(result.githubStatus.repoSlug);
+        }
+        if (result.githubStatus.branch) {
+          setGithubBranchInput(result.githubStatus.branch);
+        }
+      }
+
+      if (result.githubStatus && !result.githubStatus.repoConfigured) {
+        setShowGitHubModal(true);
+        setUpdateNotice(
+          'Connect your GitHub repository below to pull updates directly from GitHub.'
+        );
+        return;
+      }
+
+      if (result.githubStatus?.checkError) {
+        setUpdateError(result.githubStatus.checkError);
+        return;
+      }
+
       if (result.updateAvailable) {
         setUpdateAvailable(true);
-        setUpdatingApp(true);
-        await applyAppUpdate();
+        setCheckingUpdate(false);
+        await handlePullFromGitHub(false);
       } else {
+        const gh = result.githubStatus;
         setUpdateNotice(
-          `Up to date on build ${CURRENT_APP_BUILD.buildId}.`
+          gh?.repoConfigured && gh.localShortCommit
+            ? `Up to date with GitHub (${gh.repoSlug} @ ${gh.localShortCommit}${
+                gh.remoteCommitMessage ? ` — ${gh.remoteCommitMessage}` : ''
+              }).`
+            : `Up to date on build ${CURRENT_APP_BUILD.buildId}.`
         );
       }
     } finally {
@@ -1733,37 +1940,64 @@ export default function App() {
         </header>
 
         <main className="flex-1 p-4 sm:p-8 max-w-[1360px] w-full mx-auto">
-          {(updateAvailable || updateNotice) && (
+          {(updateAvailable || updateNotice || updateError) && (
             <div
               className={`no-print mb-5 px-4 py-3 rounded-lg border flex flex-wrap items-center justify-between gap-3 text-xs ${
-                updateAvailable
+                updateError
+                  ? 'bg-red-50 border-red-200 text-red-900'
+                  : updateAvailable
                   ? 'bg-blue-50 border-blue-200 text-blue-950'
                   : 'bg-white border-slate-200 text-slate-700'
               }`}
             >
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2.5 min-w-0">
                 <RefreshCw className="w-4 h-4 shrink-0 text-blue-800" />
-                <span>
-                  {updateAvailable
-                    ? `A new VeriSeal update (${
-                        remoteBuild?.buildId || 'latest'
-                      }) is ready to load.`
+                <span className="break-words">
+                  {updateError
+                    ? updateError
+                    : updateAvailable
+                    ? `A newer GitHub version (${
+                        githubStatus?.remoteShortCommit ||
+                        remoteBuild?.buildId ||
+                        'latest'
+                      }${
+                        githubStatus?.remoteCommitMessage
+                          ? ` — ${githubStatus.remoteCommitMessage}`
+                          : ''
+                      }) is available.`
                     : updateNotice}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={updatingApp}
-                  onClick={() => void handleUpdateApp(true)}
-                  className="px-3 py-1.5 font-semibold text-white bg-blue-800 rounded hover:bg-blue-900 disabled:opacity-50 cursor-pointer"
-                >
-                  {updateAvailable ? 'Update Now' : 'Reload Fresh Assets'}
-                </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {githubStatus?.repoConfigured ? (
+                  <button
+                    type="button"
+                    disabled={updatingApp}
+                    onClick={() => void handlePullFromGitHub(!updateAvailable)}
+                    className="px-3 py-1.5 font-semibold text-white bg-blue-800 rounded hover:bg-blue-900 disabled:opacity-50 cursor-pointer"
+                  >
+                    {updatingApp
+                      ? 'Updating from GitHub...'
+                      : updateAvailable
+                      ? 'Update from GitHub Now'
+                      : 'Force Pull & Rebuild'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowGitHubModal(true)}
+                    className="px-3 py-1.5 font-semibold text-white bg-blue-800 rounded hover:bg-blue-900 cursor-pointer"
+                  >
+                    Connect GitHub Repo
+                  </button>
+                )}
                 {!updateAvailable && (
                   <button
                     type="button"
-                    onClick={() => setUpdateNotice('')}
+                    onClick={() => {
+                      setUpdateNotice('');
+                      setUpdateError('');
+                    }}
                     aria-label="Dismiss update message"
                     className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
                   >
@@ -1855,7 +2089,12 @@ export default function App() {
               checkingUpdate={checkingUpdate}
               updatingApp={updatingApp}
               remoteBuild={remoteBuild}
+              githubStatus={githubStatus}
+              updateNotice={updateNotice}
+              updateError={updateError}
               onUpdateApp={handleUpdateApp}
+              onConfigureGitHubRepo={handleConfigureGitHubRepo}
+              onPullFromGitHub={handlePullFromGitHub}
             />
           )}
         </main>
@@ -1865,6 +2104,101 @@ export default function App() {
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
       />
+
+      {showGitHubModal && (
+        <div className="no-print fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-lg border border-slate-200 shadow-xl p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">
+                  Update VeriSeal from GitHub
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Enter your GitHub repository so VeriSeal can pull the latest commit, rebuild, and reload automatically.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGitHubModal(false)}
+                aria-label="Close GitHub update modal"
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {updateError && (
+              <div className="px-3 py-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded">
+                {updateError}
+              </div>
+            )}
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const saved = await handleConfigureGitHubRepo(
+                  githubRepoInput,
+                  githubBranchInput
+                );
+                if (saved) {
+                  setShowGitHubModal(false);
+                  await handlePullFromGitHub(false);
+                }
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  GitHub Repository (owner/repo or URL)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={githubRepoInput}
+                  onChange={(e) => setGithubRepoInput(e.target.value)}
+                  placeholder="https://github.com/username/veriseal"
+                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-md"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Branch
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={githubBranchInput}
+                  onChange={(e) => setGithubBranchInput(e.target.value)}
+                  placeholder="main"
+                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-md"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowGitHubModal(false)}
+                  className="px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updatingApp || !githubRepoInput.trim()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-800 rounded-md hover:bg-blue-900 disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${
+                      updatingApp ? 'animate-spin' : ''
+                    }`}
+                  />
+                  {updatingApp ? 'Updating from GitHub...' : 'Save & Update from GitHub'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

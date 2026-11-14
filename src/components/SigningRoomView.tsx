@@ -128,6 +128,21 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
   );
   const [busyStep, setBusyStep] = useState<string>('');
   const [roomError, setRoomError] = useState<string>('');
+  const [step1Error, setStep1Error] = useState<string>('');
+
+  const formatActionError = (err: unknown, fallback: string): string => {
+    if (!(err instanceof Error)) return fallback;
+    const msg = err.message.trim();
+    if (msg.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(msg) as { error?: string };
+        if (parsed.error) return parsed.error;
+      } catch {
+        // Fall through to raw message
+      }
+    }
+    return msg || fallback;
+  };
 
   // Live Camera Preview (Optional WebRTC local check)
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -139,15 +154,22 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
   }, [userProfile.customStampDataUrl]);
 
   useEffect(() => {
+    setRoomError('');
+    setStep1Error('');
+  }, [activeCase?.id]);
+
+  useEffect(() => {
     if (activeCase) {
       setTypedSignature(activeCase.signerName);
       setCredentialAnalyzed(activeCase.kbaPassed);
-      setVenueInput(
-        activeCase.meetingLocation ||
-          (activeCase.notarizationMode === 'in_person'
-            ? 'San Francisco County, CA'
-            : 'Remote Audio-Video Session')
-      );
+      const nextVenue =
+        activeCase.notarizationMode === 'in_person'
+          ? activeCase.meetingLocation &&
+            activeCase.meetingLocation !== 'Remote Audio-Video Session'
+            ? activeCase.meetingLocation
+            : userProfile.location || 'San Francisco County, CA'
+          : 'Remote Audio-Video Session';
+      setVenueInput(nextVenue);
       setIdMethod(
         activeCase.notarizationMode === 'in_person'
           ? 'Physical Government Photo ID'
@@ -155,12 +177,6 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
       );
       setIncludeCertifiedLogo(activeCase.includeCertifiedLogo ?? true);
       setIncludeNotarizedMark(activeCase.includeNotarizedMark ?? true);
-      setRoomError('');
-      if (activeCase.status === 'notarized') {
-        setCanvasTab('certificate');
-      } else {
-        setCanvasTab('file');
-      }
     }
   }, [
     activeCase?.id,
@@ -171,7 +187,13 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
     activeCase?.meetingLocation,
     activeCase?.includeCertifiedLogo,
     activeCase?.includeNotarizedMark,
+    userProfile.location,
   ]);
+
+  useEffect(() => {
+    if (!activeCase) return;
+    setCanvasTab(activeCase.status === 'notarized' ? 'certificate' : 'file');
+  }, [activeCase?.id, activeCase?.status]);
 
   useEffect(() => {
     return () => {
@@ -273,17 +295,49 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
     setHasDrawnStroke(false);
   };
 
+  const handleModeSwitch = async (nextMode: NotarizationMode) => {
+    if (isNotarized || busyStep === 'mode') return;
+    setRoomError('');
+    const nextLocation =
+      nextMode === 'in_person'
+        ? venueInput && venueInput !== 'Remote Audio-Video Session'
+          ? venueInput
+          : userProfile.location || 'San Francisco County, CA'
+        : 'Remote Audio-Video Session';
+
+    setVenueInput(nextLocation);
+    setIdMethod(
+      nextMode === 'in_person'
+        ? 'Physical Government Photo ID'
+        : 'Government Photo ID + KBA'
+    );
+    setBusyStep('mode');
+    try {
+      await onChangeMode(activeCase.id, nextMode, nextLocation);
+    } catch (err) {
+      setRoomError(
+        formatActionError(err, 'Unable to switch notarization mode.')
+      );
+    } finally {
+      setBusyStep('');
+    }
+  };
+
   const handleVerifyIdentitySubmit = async () => {
     setRoomError('');
+    setStep1Error('');
     if (activeCase.notarizationMode === 'in_person') {
       if (!physicalIdChecked || !physicalPresenceChecked || !willingnessChecked) {
-        setRoomError(
-          'Confirm all three in-person physical presence and ID inspection checks.'
-        );
+        const msg =
+          'Confirm all three in-person physical presence and ID inspection checks.';
+        setRoomError(msg);
+        setStep1Error(msg);
         return;
       }
       if (!venueInput.trim()) {
-        setRoomError('Enter the physical signing venue or county.');
+        const msg = 'Enter the physical signing venue or county.';
+        setRoomError(msg);
+        setStep1Error(msg);
         return;
       }
       setBusyStep('identity');
@@ -296,9 +350,9 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
         );
         setCredentialAnalyzed(true);
       } catch (err) {
-        setRoomError(
-          err instanceof Error ? err.message : 'Failed to record identity check.'
-        );
+        const msg = formatActionError(err, 'Failed to record identity check.');
+        setRoomError(msg);
+        setStep1Error(msg);
       } finally {
         setBusyStep('');
       }
@@ -309,9 +363,9 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
       (q) => kbaAnswers[q.id] === q.correctIndex
     ).length;
     if (correctCount < 2) {
-      setRoomError(
-        `KBA verification requires at least 2 of 3 correct answers (currently ${correctCount}/3).`
-      );
+      const msg = `KBA verification requires at least 2 of 3 correct answers (currently ${correctCount}/3).`;
+      setRoomError(msg);
+      setStep1Error(msg);
       return;
     }
     setBusyStep('identity');
@@ -325,9 +379,9 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
       );
       setCredentialAnalyzed(true);
     } catch (err) {
-      setRoomError(
-        err instanceof Error ? err.message : 'Failed to record identity check.'
-      );
+      const msg = formatActionError(err, 'Failed to record identity check.');
+      setRoomError(msg);
+      setStep1Error(msg);
     } finally {
       setBusyStep('');
     }
@@ -355,7 +409,7 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
       await onApplySignature(activeCase.id, signatureData, sigMode);
     } catch (err) {
       setRoomError(
-        err instanceof Error ? err.message : 'Failed to apply electronic signature.'
+        formatActionError(err, 'Failed to apply electronic signature.')
       );
     } finally {
       setBusyStep('');
@@ -380,9 +434,7 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
       );
     } catch (err) {
       setRoomError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to apply saved profile signature.'
+        formatActionError(err, 'Failed to apply saved profile signature.')
       );
     } finally {
       setBusyStep('');
@@ -400,7 +452,7 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
         await onToggleEmblems(activeCase.id, nextCertified, nextNotarized);
       } catch (err) {
         setRoomError(
-          err instanceof Error ? err.message : 'Could not save emblem preference.'
+          formatActionError(err, 'Could not save emblem preference.')
         );
       }
     }
@@ -419,7 +471,7 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
       setCanvasTab('certificate');
     } catch (err) {
       setRoomError(
-        err instanceof Error ? err.message : 'Failed to notarize and seal document.'
+        formatActionError(err, 'Failed to notarize and seal document.')
       );
     } finally {
       setBusyStep('');
@@ -1017,38 +1069,28 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
                 {userProfile.commissionNumber || 'CA-2491804'}
               </p>
             </div>
-            {activeCase.status === 'draft' && (
+            {!isNotarized && (
               <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-md">
                 <button
                   type="button"
-                  onClick={() =>
-                    void onChangeMode(
-                      activeCase.id,
-                      'online',
-                      'Remote Audio-Video Session'
-                    )
-                  }
-                  className={`px-2.5 py-1 text-[11px] font-medium rounded cursor-pointer ${
+                  disabled={busyStep === 'mode'}
+                  onClick={() => void handleModeSwitch('online')}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded cursor-pointer disabled:opacity-50 ${
                     activeCase.notarizationMode === 'online'
                       ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   Online
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    void onChangeMode(
-                      activeCase.id,
-                      'in_person',
-                      venueInput || 'San Francisco County, CA'
-                    )
-                  }
-                  className={`px-2.5 py-1 text-[11px] font-medium rounded cursor-pointer ${
+                  disabled={busyStep === 'mode'}
+                  onClick={() => void handleModeSwitch('in_person')}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded cursor-pointer disabled:opacity-50 ${
                     activeCase.notarizationMode === 'in_person'
                       ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   In-Person
@@ -1230,6 +1272,12 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
                   </label>
                 </div>
 
+                {step1Error && (
+                  <div className="px-3 py-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md">
+                    {step1Error}
+                  </div>
+                )}
+
                 <button
                   type="button"
                   disabled={busyStep === 'identity'}
@@ -1301,6 +1349,12 @@ export const SigningRoomView: React.FC<SigningRoomViewProps> = ({
                     </div>
                   ))}
                 </div>
+
+                {step1Error && (
+                  <div className="px-3 py-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md">
+                    {step1Error}
+                  </div>
+                )}
 
                 <button
                   type="button"

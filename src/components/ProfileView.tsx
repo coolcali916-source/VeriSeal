@@ -11,7 +11,9 @@ import {
 import { auth } from '../lib/firebase';
 import {
   CURRENT_APP_BUILD,
+  getSavedGitHubTarget,
   type AppVersionManifest,
+  type GitHubUpdateStatus,
 } from '../lib/appUpdater';
 import type { NotarizationCase, SignatureType, UserProfile } from '../types/notary';
 import { ProfileSignatureTool } from './ProfileSignatureTool';
@@ -29,7 +31,12 @@ interface ProfileViewProps {
   checkingUpdate: boolean;
   updatingApp: boolean;
   remoteBuild: AppVersionManifest | null;
+  githubStatus: GitHubUpdateStatus | null;
+  updateNotice: string;
+  updateError: string;
   onUpdateApp: (forceReload?: boolean) => Promise<void>;
+  onConfigureGitHubRepo: (repo: string, branch: string) => Promise<boolean>;
+  onPullFromGitHub: (force?: boolean) => Promise<void>;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -44,13 +51,33 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   checkingUpdate,
   updatingApp,
   remoteBuild,
+  githubStatus,
+  updateNotice,
+  updateError,
   onUpdateApp,
+  onConfigureGitHubRepo,
+  onPullFromGitHub,
 }) => {
   const [form, setForm] = useState<UserProfile>(profile);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
   const [resetNotice, setResetNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [repoInput, setRepoInput] = useState(
+    () => githubStatus?.repoSlug || getSavedGitHubTarget().repo || ''
+  );
+  const [branchInput, setBranchInput] = useState(
+    () => githubStatus?.branch || getSavedGitHubTarget().branch || 'main'
+  );
+
+  useEffect(() => {
+    if (githubStatus?.repoSlug && !repoInput) {
+      setRepoInput(githubStatus.repoSlug);
+    }
+    if (githubStatus?.branch) {
+      setBranchInput(githubStatus.branch);
+    }
+  }, [githubStatus?.repoSlug, githubStatus?.branch]);
 
   useEffect(() => {
     setForm(profile);
@@ -340,55 +367,142 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         saving={saving}
       />
 
-      {/* Application Version & Live Updates */}
-      <div className="border border-slate-200 bg-white rounded-lg p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h3 className="text-base font-semibold text-slate-900">
-            Application Updates
-          </h3>
-          <p className="text-xs text-slate-500 mt-0.5 font-mono tabular-nums">
-            Current Build: {CURRENT_APP_BUILD.buildId} · Built{' '}
-            {new Date(CURRENT_APP_BUILD.builtAt).toLocaleString()}
-          </p>
-          {updateAvailable && remoteBuild && (
-            <p className="text-xs font-medium text-blue-800 mt-1">
-              New build available ({remoteBuild.buildId}). Click Update App Now to load the latest version.
+      {/* Application Version & GitHub Self-Update */}
+      <div className="border border-slate-200 bg-white rounded-lg p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-slate-900">
+              Application Updates (GitHub Sync)
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5 font-mono tabular-nums">
+              Current Build: {CURRENT_APP_BUILD.buildId} · Built{' '}
+              {new Date(CURRENT_APP_BUILD.builtAt).toLocaleString()}
+              {githubStatus?.localShortCommit
+                ? ` · Commit ${githubStatus.localShortCommit}`
+                : ''}
             </p>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            type="button"
-            disabled={checkingUpdate || updatingApp}
-            onClick={() => void onUpdateApp(false)}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors cursor-pointer disabled:opacity-50 ${
-              updateAvailable
-                ? 'text-white bg-blue-800 hover:bg-blue-900'
-                : 'text-slate-900 bg-white border border-slate-300 hover:bg-slate-50'
-            }`}
-          >
-            <RefreshCw
-              className={`w-3.5 h-3.5 ${
-                checkingUpdate || updatingApp ? 'animate-spin' : ''
+            {githubStatus?.repoConfigured && (
+              <p className="text-xs text-slate-600 mt-1">
+                Linked GitHub:{' '}
+                <span className="font-mono font-medium text-slate-900">
+                  {githubStatus.repoSlug || githubStatus.originUrl}
+                </span>{' '}
+                ({githubStatus.branch})
+                {githubStatus.remoteShortCommit && (
+                  <>
+                    {' '}
+                    · Latest:{' '}
+                    <span className="font-mono font-medium text-slate-900">
+                      {githubStatus.remoteShortCommit}
+                    </span>
+                    {githubStatus.remoteCommitMessage
+                      ? ` — ${githubStatus.remoteCommitMessage}`
+                      : ''}
+                  </>
+                )}
+              </p>
+            )}
+            {updateAvailable && (
+              <p className="text-xs font-medium text-blue-800 mt-1">
+                Newer version detected
+                {githubStatus?.remoteShortCommit
+                  ? ` on GitHub (${githubStatus.remoteShortCommit})`
+                  : remoteBuild
+                  ? ` (${remoteBuild.buildId})`
+                  : ''}
+                . Click Update from GitHub to pull &amp; rebuild.
+              </p>
+            )}
+            {updateNotice && !updateAvailable && (
+              <p className="text-xs font-medium text-emerald-700 mt-1">
+                {updateNotice}
+              </p>
+            )}
+            {updateError && (
+              <p className="text-xs font-medium text-red-700 mt-1">
+                {updateError}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={checkingUpdate || updatingApp}
+              onClick={() => void onUpdateApp(false)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md transition-colors cursor-pointer disabled:opacity-50 ${
+                updateAvailable
+                  ? 'text-white bg-blue-800 hover:bg-blue-900'
+                  : 'text-slate-900 bg-white border border-slate-300 hover:bg-slate-50'
               }`}
-            />
-            {updatingApp
-              ? 'Updating App...'
-              : checkingUpdate
-              ? 'Checking...'
-              : updateAvailable
-              ? 'Update App Now'
-              : 'Check for Updates'}
-          </button>
-          <button
-            type="button"
-            disabled={updatingApp}
-            onClick={() => void onUpdateApp(true)}
-            className="px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer disabled:opacity-50"
-          >
-            Reload Fresh Assets
-          </button>
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  checkingUpdate || updatingApp ? 'animate-spin' : ''
+                }`}
+              />
+              {updatingApp
+                ? 'Updating from GitHub...'
+                : checkingUpdate
+                ? 'Checking GitHub...'
+                : updateAvailable
+                ? 'Update from GitHub'
+                : 'Check GitHub Updates'}
+            </button>
+            <button
+              type="button"
+              disabled={updatingApp}
+              onClick={() => void onPullFromGitHub(true)}
+              className="px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer disabled:opacity-50"
+            >
+              Force Pull &amp; Rebuild
+            </button>
+          </div>
         </div>
+
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const ok = await onConfigureGitHubRepo(repoInput, branchInput);
+            if (ok) {
+              await onUpdateApp(false);
+            }
+          }}
+          className="pt-4 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+        >
+          <div className="sm:col-span-6">
+            <label className="block text-[11px] font-medium text-slate-600 mb-1">
+              GitHub Repository (owner/repo or URL)
+            </label>
+            <input
+              type="text"
+              value={repoInput}
+              onChange={(e) => setRepoInput(e.target.value)}
+              placeholder="e.g. username/veriseal or https://github.com/username/veriseal"
+              className="w-full px-3 py-1.5 text-xs font-mono border border-slate-300 rounded-md"
+            />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block text-[11px] font-medium text-slate-600 mb-1">
+              Branch
+            </label>
+            <input
+              type="text"
+              value={branchInput}
+              onChange={(e) => setBranchInput(e.target.value)}
+              placeholder="main"
+              className="w-full px-3 py-1.5 text-xs font-mono border border-slate-300 rounded-md"
+            />
+          </div>
+          <div className="sm:col-span-3">
+            <button
+              type="submit"
+              disabled={checkingUpdate || updatingApp || !repoInput.trim()}
+              className="w-full px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-md hover:bg-slate-800 disabled:opacity-45 cursor-pointer"
+            >
+              Save Repo &amp; Check
+            </button>
+          </div>
+        </form>
       </div>
 
       {/* Personal Notarization History */}
