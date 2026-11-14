@@ -85,16 +85,16 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.uid) &&
-        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
-        data.email is string && data.email.size() <= 120 &&
-        data.phone is string && data.phone.size() <= 40 &&
-        data.location is string && data.location.size() <= 120 &&
-        data.commissionNumber is string && data.commissionNumber.size() <= 60 &&
-        data.commissionJurisdiction is string && data.commissionJurisdiction.size() <= 60 &&
-        data.commissionExpires is string && data.commissionExpires.size() <= 30 &&
-        data.customStampDataUrl is string && data.customStampDataUrl.size() <= 180000 &&
-        (!('savedSignatureData' in data) || (data.savedSignatureData is string && data.savedSignatureData.size() <= 150000)) &&
-        (!('savedSignatureType' in data) || isValidSignatureType(data.savedSignatureType)) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120 &&
+        data.email is string && data.email.size() <= 200 &&
+        data.phone is string && data.phone.size() <= 60 &&
+        data.location is string && data.location.size() <= 200 &&
+        data.commissionNumber is string && data.commissionNumber.size() <= 80 &&
+        data.commissionJurisdiction is string && data.commissionJurisdiction.size() <= 80 &&
+        data.commissionExpires is string && data.commissionExpires.size() <= 40 &&
+        data.customStampDataUrl is string && data.customStampDataUrl.size() <= 500000 &&
+        (!('savedSignatureData' in data) || data.savedSignatureData == null || (data.savedSignatureData is string && data.savedSignatureData.size() <= 500000)) &&
+        (!('savedSignatureType' in data) || data.savedSignatureType == null || isValidSignatureType(data.savedSignatureType)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -114,55 +114,55 @@ service cloud.firestore {
           'ownerId', 'title', 'fileName', 'actType', 'status',
           'signerName', 'documentText', 'documentHash', 'updatedAt'
         ]) &&
-        (!('id' in data) || (isValidId(data.id) && data.id.size() <= 64)) &&
+        (!('id' in data) || data.id == null || (isValidId(data.id) && data.id.size() <= 64)) &&
         isValidId(data.ownerId) &&
-        (!('folderId' in data) || (data.folderId is string && data.folderId.size() <= 64)) &&
-        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
-        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 180 &&
-        (!('fileType' in data) || (data.fileType is string && data.fileType.size() <= 100)) &&
-        (!('fileSize' in data) || ((data.fileSize is int || data.fileSize is float) && data.fileSize >= 0 && data.fileSize <= 104857600)) &&
+        (!('folderId' in data) || data.folderId == null || (data.folderId is string && data.folderId.size() <= 64)) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 255 &&
+        (!('fileType' in data) || data.fileType == null || (data.fileType is string && data.fileType.size() <= 160)) &&
+        (!('fileSize' in data) || data.fileSize == null || ((data.fileSize is int || data.fileSize is float) && data.fileSize >= 0 && data.fileSize <= 524288000)) &&
         isValidActType(data.actType) &&
-        (!('notarizationMode' in data) || isValidNotarizationMode(data.notarizationMode)) &&
-        (!('meetingLocation' in data) || (data.meetingLocation is string && data.meetingLocation.size() <= 160)) &&
+        (!('notarizationMode' in data) || data.notarizationMode == null || isValidNotarizationMode(data.notarizationMode)) &&
+        (!('meetingLocation' in data) || data.meetingLocation == null || (data.meetingLocation is string && data.meetingLocation.size() <= 200)) &&
         isValidStatus(data.status) &&
-        data.signerName is string && data.signerName.size() >= 1 && data.signerName.size() <= 100 &&
-        (!('signerEmail' in data) || (data.signerEmail is string && data.signerEmail.size() <= 120)) &&
-        data.documentText is string && data.documentText.size() >= 1 && data.documentText.size() <= 100000 &&
-        data.documentHash is string && data.documentHash.size() == 64 &&
-        (!('idMethod' in data) || (data.idMethod is string && data.idMethod.size() <= 80)) &&
-        (!('idScore' in data) || ((data.idScore is int || data.idScore is float) && data.idScore >= 0 && data.idScore <= 100)) &&
-        (!('kbaPassed' in data) || data.kbaPassed is bool) &&
-        (!('signerSignatureData' in data) || (data.signerSignatureData is string && data.signerSignatureData.size() <= 200000)) &&
-        (!('signatureType' in data) || isValidSignatureType(data.signatureType)) &&
-        (!('notaryName' in data) || (data.notaryName is string && data.notaryName.size() <= 100)) &&
-        (!('notaryCommission' in data) || (data.notaryCommission is string && data.notaryCommission.size() <= 60)) &&
-        (!('notaryJurisdiction' in data) || (data.notaryJurisdiction is string && data.notaryJurisdiction.size() <= 60)) &&
-        (!('notaryExpires' in data) || (data.notaryExpires is string && data.notaryExpires.size() <= 30)) &&
-        (!('notaryStampDataUrl' in data) || (data.notaryStampDataUrl is string && data.notaryStampDataUrl.size() <= 200000)) &&
-        (!('includeCertifiedLogo' in data) || data.includeCertifiedLogo is bool) &&
-        (!('includeNotarizedMark' in data) || data.includeNotarizedMark is bool) &&
-        (!('certificateCode' in data) || (data.certificateCode is string && data.certificateCode.size() <= 40)) &&
-        (!('sealedHash' in data) || (data.sealedHash is string && data.sealedHash.size() <= 64)) &&
-        (!('signatureAlgorithm' in data) || (data.signatureAlgorithm is string && data.signatureAlgorithm.size() <= 40)) &&
-        (!('publicKeyJwk' in data) || (data.publicKeyJwk is string && data.publicKeyJwk.size() <= 1000)) &&
-        (!('digitalSignature' in data) || (data.digitalSignature is string && data.digitalSignature.size() <= 512)) &&
-        (!('signedPayload' in data) || (data.signedPayload is string && data.signedPayload.size() <= 4000)) &&
-        (!('timestampIso' in data) || (data.timestampIso is string && data.timestampIso.size() <= 64)) &&
-        (!('feeCents' in data) || ((data.feeCents is int || data.feeCents is float) && data.feeCents >= 0 && data.feeCents <= 100000)) &&
-        (!('createdAt' in data) || data.createdAt is timestamp) &&
+        data.signerName is string && data.signerName.size() >= 1 && data.signerName.size() <= 120 &&
+        (!('signerEmail' in data) || data.signerEmail == null || (data.signerEmail is string && data.signerEmail.size() <= 200)) &&
+        data.documentText is string && data.documentText.size() <= 900000 &&
+        data.documentHash is string && data.documentHash.size() >= 16 && data.documentHash.size() <= 128 &&
+        (!('idMethod' in data) || data.idMethod == null || (data.idMethod is string && data.idMethod.size() <= 120)) &&
+        (!('idScore' in data) || data.idScore == null || ((data.idScore is int || data.idScore is float) && data.idScore >= 0 && data.idScore <= 100)) &&
+        (!('kbaPassed' in data) || data.kbaPassed == null || data.kbaPassed is bool) &&
+        (!('signerSignatureData' in data) || data.signerSignatureData == null || (data.signerSignatureData is string && data.signerSignatureData.size() <= 500000)) &&
+        (!('signatureType' in data) || data.signatureType == null || isValidSignatureType(data.signatureType)) &&
+        (!('notaryName' in data) || data.notaryName == null || (data.notaryName is string && data.notaryName.size() <= 120)) &&
+        (!('notaryCommission' in data) || data.notaryCommission == null || (data.notaryCommission is string && data.notaryCommission.size() <= 80)) &&
+        (!('notaryJurisdiction' in data) || data.notaryJurisdiction == null || (data.notaryJurisdiction is string && data.notaryJurisdiction.size() <= 80)) &&
+        (!('notaryExpires' in data) || data.notaryExpires == null || (data.notaryExpires is string && data.notaryExpires.size() <= 40)) &&
+        (!('notaryStampDataUrl' in data) || data.notaryStampDataUrl == null || (data.notaryStampDataUrl is string && data.notaryStampDataUrl.size() <= 500000)) &&
+        (!('includeCertifiedLogo' in data) || data.includeCertifiedLogo == null || data.includeCertifiedLogo is bool) &&
+        (!('includeNotarizedMark' in data) || data.includeNotarizedMark == null || data.includeNotarizedMark is bool) &&
+        (!('certificateCode' in data) || data.certificateCode == null || (data.certificateCode is string && data.certificateCode.size() <= 64)) &&
+        (!('sealedHash' in data) || data.sealedHash == null || (data.sealedHash is string && data.sealedHash.size() <= 128)) &&
+        (!('signatureAlgorithm' in data) || data.signatureAlgorithm == null || (data.signatureAlgorithm is string && data.signatureAlgorithm.size() <= 64)) &&
+        (!('publicKeyJwk' in data) || data.publicKeyJwk == null || (data.publicKeyJwk is string && data.publicKeyJwk.size() <= 2000)) &&
+        (!('digitalSignature' in data) || data.digitalSignature == null || (data.digitalSignature is string && data.digitalSignature.size() <= 1024)) &&
+        (!('signedPayload' in data) || data.signedPayload == null || (data.signedPayload is string && data.signedPayload.size() <= 8000)) &&
+        (!('timestampIso' in data) || data.timestampIso == null || (data.timestampIso is string && data.timestampIso.size() <= 64)) &&
+        (!('feeCents' in data) || data.feeCents == null || ((data.feeCents is int || data.feeCents is float) && data.feeCents >= 0 && data.feeCents <= 1000000)) &&
+        (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp) &&
         data.updatedAt is timestamp &&
-        (!('notarizedAt' in data) || data.notarizedAt is timestamp) &&
-        (!('placement' in data) || isValidPlacement(data.placement));
+        (!('notarizedAt' in data) || data.notarizedAt == null || data.notarizedAt is timestamp) &&
+        (!('placement' in data) || data.placement == null || isValidPlacement(data.placement));
     }
 
     function isValidPlacementBox(box) {
       return box is map &&
-        box.keys().hasAll(['page', 'xPct', 'yPct', 'scale']) &&
+        box.keys().hasAll(['page', 'xPct', 'yPct']) &&
         box.keys().hasOnly(['page', 'xPct', 'yPct', 'scale']) &&
-        (box.page is int || box.page is float) && box.page >= 1 && box.page <= 500 &&
-        (box.xPct is int || box.xPct is float) && box.xPct >= 0 && box.xPct <= 100 &&
-        (box.yPct is int || box.yPct is float) && box.yPct >= 0 && box.yPct <= 100 &&
-        (box.scale is int || box.scale is float) && box.scale >= 0.4 && box.scale <= 2.5;
+        (box.page is int || box.page is float) && box.page >= 1 && box.page <= 2000 &&
+        (box.xPct is int || box.xPct is float) && box.xPct >= -50 && box.xPct <= 150 &&
+        (box.yPct is int || box.yPct is float) && box.yPct >= -50 && box.yPct <= 150 &&
+        (!('scale' in box) || ((box.scale is int || box.scale is float) && box.scale >= 0.1 && box.scale <= 5.0));
     }
 
     function isValidPlacement(p) {
@@ -388,10 +388,10 @@ service cloud.firestore {
               ) ||
               // Action 2: Complete identity verification (credential analysis + KBA or in-person ID check)
               (
-                (existing().status == 'draft' || existing().status == 'identity_verified') &&
+                (existing().status == 'draft' || existing().status == 'identity_verified' || existing().status == 'signed') &&
                 incoming().status == 'identity_verified' &&
                 incoming().kbaPassed == true &&
-                incoming().idScore >= 80 &&
+                incoming().idScore >= 70 &&
                 incoming().diff(existing()).affectedKeys().hasOnly([
                   'status', 'idMethod', 'idScore', 'kbaPassed', 'meetingLocation', 'updatedAt'
                 ])

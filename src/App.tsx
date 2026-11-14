@@ -488,8 +488,10 @@ export default function App() {
         if (!snap.exists()) {
           await setDoc(profileRef, {
             uid,
-            displayName: firebaseUser.displayName || 'Notary User',
-            email: firebaseUser.email || '',
+            displayName:
+              (firebaseUser.displayName || '').trim().slice(0, 100) ||
+              'Notary User',
+            email: (firebaseUser.email || '').trim().slice(0, 180),
             phone: '',
             location: 'San Francisco, CA',
             commissionNumber: 'CA-2491804',
@@ -503,7 +505,7 @@ export default function App() {
           });
         }
       } catch (err) {
-        handleFirestoreError(err, OperationType.GET, `userProfiles/${uid}`);
+        console.error('Failed to initialize user profile:', err);
       }
     })();
 
@@ -761,6 +763,7 @@ export default function App() {
   // Handlers
   const handleCreateFolder = async (name: string) => {
     const id = makeId('fld');
+    const safeName = name.trim().slice(0, 60) || 'Untitled Folder';
     const nowIso = new Date().toISOString();
     if (firebaseUser) {
       const path = `folders/${id}`;
@@ -768,7 +771,7 @@ export default function App() {
         await setDoc(doc(db, 'folders', id), {
           id,
           ownerId: firebaseUser.uid,
-          name,
+          name: safeName,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -781,7 +784,7 @@ export default function App() {
         {
           id,
           ownerId: 'local_preview',
-          name,
+          name: safeName,
           createdAtIso: nowIso,
           updatedAtIso: nowIso,
         },
@@ -790,11 +793,12 @@ export default function App() {
   };
 
   const handleRenameFolder = async (folderId: string, name: string) => {
+    const safeName = name.trim().slice(0, 60) || 'Untitled Folder';
     if (firebaseUser) {
       const path = `folders/${folderId}`;
       try {
         await updateDoc(doc(db, 'folders', folderId), {
-          name,
+          name: safeName,
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
@@ -804,7 +808,7 @@ export default function App() {
       setFolders((prev) =>
         prev.map((f) =>
           f.id === folderId
-            ? { ...f, name, updatedAtIso: new Date().toISOString() }
+            ? { ...f, name: safeName, updatedAtIso: new Date().toISOString() }
             : f
         )
       );
@@ -1043,6 +1047,9 @@ export default function App() {
     actor: string,
     details: string
   ) => {
+    const safeStep = step.trim().slice(0, 80) || 'Audit Event';
+    const safeActor = actor.trim().slice(0, 120) || 'Notary User';
+    const safeDetails = details.trim().slice(0, 300) || 'Session event recorded';
     const existingEvents = custodyByCase[caseId] || [];
     const prevHash =
       existingEvents.length > 0
@@ -1051,9 +1058,9 @@ export default function App() {
     const nowIso = new Date().toISOString();
     const eventHash = await computeCustodyEventHash(
       prevHash,
-      step,
-      actor,
-      details,
+      safeStep,
+      safeActor,
+      safeDetails,
       nowIso
     );
     const eventId = makeId('ev');
@@ -1064,9 +1071,9 @@ export default function App() {
           id: eventId,
           ownerId: firebaseUser.uid,
           caseId,
-          step,
-          actor,
-          details,
+          step: safeStep,
+          actor: safeActor,
+          details: safeDetails,
           eventHash,
           recordedAt: serverTimestamp(),
         });
@@ -1086,9 +1093,9 @@ export default function App() {
             id: eventId,
             ownerId: 'local_preview',
             caseId,
-            step,
-            actor,
-            details,
+            step: safeStep,
+            actor: safeActor,
+            details: safeDetails,
             eventHash,
             recordedAtIso: nowIso,
           },
@@ -1360,25 +1367,39 @@ export default function App() {
     const target = cases.find((c) => c.id === caseId);
     if (!target) return;
 
-    const notaryName = userProfile.displayName || 'Elena Vance';
-    const notaryCommission = userProfile.commissionNumber || 'CA-2491804';
+    const notaryName =
+      (userProfile.displayName || '').trim().slice(0, 100) || 'Elena Vance';
+    const notaryCommission =
+      (userProfile.commissionNumber || '').trim().slice(0, 60) || 'CA-2491804';
     const notaryJurisdiction =
-      userProfile.commissionJurisdiction || 'State of California';
-    const notaryExpires = userProfile.commissionExpires || '2028-09-30';
+      (userProfile.commissionJurisdiction || '').trim().slice(0, 60) ||
+      'State of California';
+    const notaryExpires =
+      (userProfile.commissionExpires || '').trim().slice(0, 30) || '2028-09-30';
     const stampUrl = useCustomTransparentStamp
-      ? userProfile.customStampDataUrl
+      ? String(userProfile.customStampDataUrl || '').slice(0, 450000)
       : '';
+    const safeTitle = target.title.trim().slice(0, 140) || 'Notarized Document';
+    const safeFileName = target.fileName.trim().slice(0, 180) || 'document.pdf';
+    const safeSignerName = target.signerName.trim().slice(0, 100) || 'Principal Signer';
+    const safeIdMethod =
+      (target.idMethod || '').trim().slice(0, 80) ||
+      (target.notarizationMode === 'in_person'
+        ? 'Physical Government Photo ID'
+        : 'Government Photo ID + KBA');
+    const safeLocation = (target.meetingLocation || '').trim().slice(0, 160);
+    const safeFeeCents = Math.max(0, Math.min(100000, Math.round(Number(target.feeCents) || 0)));
 
     const sealResult = await generateAndSignNotarization({
       caseId: target.id,
-      documentTitle: target.title,
-      fileName: target.fileName,
+      documentTitle: safeTitle,
+      fileName: safeFileName,
       fileSize: target.fileSize,
       documentHash: target.documentHash,
       actType: target.actType,
       notarizationMode: target.notarizationMode,
-      meetingLocation: target.meetingLocation,
-      signerName: target.signerName,
+      meetingLocation: safeLocation,
+      signerName: safeSignerName,
       notaryName,
       notaryCommission,
       notaryJurisdiction,
@@ -1432,17 +1453,17 @@ export default function App() {
           ownerId: uid,
           caseId: target.id,
           entryNumber,
-          documentTitle: target.title,
-          fileName: target.fileName,
+          documentTitle: safeTitle,
+          fileName: safeFileName,
           actType: target.actType,
           notarizationMode: target.notarizationMode,
-          meetingLocation: target.meetingLocation,
-          signerName: target.signerName,
-          idMethod: target.idMethod,
+          meetingLocation: safeLocation,
+          signerName: safeSignerName,
+          idMethod: safeIdMethod,
           certificateCode: sealResult.certificateCode,
           sealedHash: sealResult.sealedHash,
           timestampIso: sealResult.timestampIso,
-          feeCents: target.feeCents,
+          feeCents: safeFeeCents,
           recordedAt: serverTimestamp(),
         });
 
@@ -1450,12 +1471,12 @@ export default function App() {
           certificateCode: sealResult.certificateCode,
           ownerId: uid,
           caseId: target.id,
-          documentTitle: target.title,
-          fileName: target.fileName,
-          fileSize: target.fileSize,
+          documentTitle: safeTitle,
+          fileName: safeFileName,
+          fileSize: Math.max(0, Math.min(104857600, Math.round(Number(target.fileSize) || 0))),
           actType: target.actType,
           notarizationMode: target.notarizationMode,
-          meetingLocation: target.meetingLocation,
+          meetingLocation: safeLocation,
           documentHash: target.documentHash,
           sealedHash: sealResult.sealedHash,
           signatureAlgorithm: sealResult.signatureAlgorithm,
@@ -1476,7 +1497,7 @@ export default function App() {
           caseId,
           step: 'Notary Seal & ECDSA Timestamp Applied',
           actor: notaryName,
-          details: `Certificate ${sealResult.certificateCode} sealed & recorded in statutory journal`,
+          details: `Certificate ${sealResult.certificateCode} sealed & recorded in statutory journal`.slice(0, 300),
           eventHash: evHash,
           recordedAt: serverTimestamp(),
         });
@@ -1585,32 +1606,47 @@ export default function App() {
         ? next.savedSignatureType
         : 'none';
     const sigData =
-      sigType === 'none' ? '' : String(next.savedSignatureData || '').slice(0, 150000);
+      sigType === 'none'
+        ? ''
+        : String(next.savedSignatureData || '').slice(0, 450000);
+    const payloadFields = {
+      displayName: next.displayName.trim().slice(0, 120) || 'Notary User',
+      email: next.email.trim().slice(0, 190),
+      phone: next.phone.trim().slice(0, 55),
+      location: next.location.trim().slice(0, 190),
+      commissionNumber: next.commissionNumber.trim().slice(0, 75),
+      commissionJurisdiction: next.commissionJurisdiction.trim().slice(0, 75),
+      commissionExpires: next.commissionExpires.trim().slice(0, 35),
+      customStampDataUrl: String(next.customStampDataUrl || '').slice(0, 450000),
+      savedSignatureData: sigData,
+      savedSignatureType: sigType,
+    };
 
     if (firebaseUser) {
       const uid = firebaseUser.uid;
+      const profileRef = doc(db, 'userProfiles', uid);
       try {
-        await updateDoc(doc(db, 'userProfiles', uid), {
-          displayName: next.displayName.trim() || 'Notary User',
-          email: next.email.trim(),
-          phone: next.phone.trim(),
-          location: next.location.trim(),
-          commissionNumber: next.commissionNumber.trim(),
-          commissionJurisdiction: next.commissionJurisdiction.trim(),
-          commissionExpires: next.commissionExpires.trim(),
-          customStampDataUrl: next.customStampDataUrl,
-          savedSignatureData: sigData,
-          savedSignatureType: sigType,
-          updatedAt: serverTimestamp(),
-        });
+        const snap = await getDoc(profileRef);
+        if (snap.exists()) {
+          await updateDoc(profileRef, {
+            ...payloadFields,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(profileRef, {
+            uid,
+            ...payloadFields,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `userProfiles/${uid}`);
       }
     } else {
       setUserProfile({
         ...next,
-        savedSignatureData: sigData,
-        savedSignatureType: sigType,
+        ...payloadFields,
       });
     }
   };
