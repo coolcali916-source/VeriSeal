@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { sendPasswordResetEmail, type User } from 'firebase/auth';
 import {
   Check,
   KeyRound,
@@ -8,7 +7,7 @@ import {
   Shield,
   UserCheck,
 } from 'lucide-react';
-import { auth } from '../lib/firebase';
+import { authChangePassword, type AuthUser } from '../lib/localApi';
 import {
   CURRENT_APP_BUILD,
   getSavedGitHubTarget,
@@ -20,7 +19,7 @@ import { ProfileSignatureTool } from './ProfileSignatureTool';
 import { StampUploaderTool } from './StampUploaderTool';
 
 interface ProfileViewProps {
-  firebaseUser: User | null;
+  authUser: AuthUser | null;
   profile: UserProfile;
   cases: NotarizationCase[];
   onSaveProfile: (next: UserProfile) => Promise<void>;
@@ -40,7 +39,7 @@ interface ProfileViewProps {
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
-  firebaseUser,
+  authUser,
   profile,
   cases,
   onSaveProfile,
@@ -63,6 +62,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [savedMsg, setSavedMsg] = useState('');
   const [resetNotice, setResetNotice] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
   const [repoInput, setRepoInput] = useState(
     () => githubStatus?.repoSlug || getSavedGitHubTarget().repo || ''
   );
@@ -119,81 +122,131 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     await onSaveProfile(next);
   };
 
-  const handlePasswordReset = async () => {
-    if (!firebaseUser?.email) return;
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authUser) return;
     setResetNotice('');
     setErrorMsg('');
+    setChangingPassword(true);
     try {
-      await sendPasswordResetEmail(auth, firebaseUser.email);
-      setResetNotice(
-        `Password recovery email dispatched to ${firebaseUser.email}.`
-      );
+      await authChangePassword({ currentPassword, newPassword });
+      setResetNotice('Your local VPS account password has been updated.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setShowPasswordForm(false);
     } catch (err) {
       setErrorMsg(
-        err instanceof Error
-          ? err.message
-          : 'Unable to send password recovery email.'
+        err instanceof Error ? err.message : 'Unable to update password.'
       );
+    } finally {
+      setChangingPassword(false);
     }
   };
 
   return (
     <div className="space-y-6">
       {/* Account Status & Authentication Summary */}
-      <div className="border border-slate-200 bg-white rounded-lg p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-start gap-4">
-          <div className="w-11 h-11 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
-            <UserCheck className="w-5 h-5 text-slate-800" />
+      <div className="border border-slate-200 bg-white rounded-lg p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="w-11 h-11 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
+              <UserCheck className="w-5 h-5 text-slate-800" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                {authUser
+                  ? authUser.displayName || profile.displayName
+                  : 'Local Workspace Preview'}
+              </h2>
+              <p className="text-xs text-slate-600 mt-0.5">
+                {authUser
+                  ? `${authUser.email} · Self-Hosted VPS SQLite Synced`
+                  : 'Sign in or create a local VPS account to persist your documents, uploaded files, folders, and transparent notary stamp on your server.'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">
-              {firebaseUser
-                ? firebaseUser.displayName || profile.displayName
-                : 'Local Workspace Preview'}
-            </h2>
-            <p className="text-xs text-slate-600 mt-0.5">
-              {firebaseUser
-                ? `${firebaseUser.email} · ${
-                    firebaseUser.emailVerified ? 'Verified Identity' : 'Unverified Email'
-                  } · Synced to Firestore`
-                : 'Sign in with Google or Email/Password to persist your documents, folders, and transparent notary stamp in Firestore.'}
-            </p>
-          </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          {firebaseUser ? (
-            <>
-              {firebaseUser.email && (
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {authUser ? (
+              <>
                 <button
                   type="button"
-                  onClick={() => void handlePasswordReset()}
+                  onClick={() => setShowPasswordForm((prev) => !prev)}
                   className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 cursor-pointer"
                 >
                   <KeyRound className="w-3.5 h-3.5" />
-                  Password Reset
+                  Change Password
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => void onSignOut()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-md hover:bg-red-50 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Sign Out
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
-                onClick={() => void onSignOut()}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-md hover:bg-red-50 cursor-pointer"
+                onClick={onOpenAuthModal}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-800 rounded-md hover:bg-blue-900 cursor-pointer"
               >
-                <LogOut className="w-3.5 h-3.5" />
-                Sign Out
+                <Shield className="w-3.5 h-3.5" />
+                Sign In / Register
               </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={onOpenAuthModal}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-800 rounded-md hover:bg-blue-900 cursor-pointer"
-            >
-              <Shield className="w-3.5 h-3.5" />
-              Sign In / Register
-            </button>
-          )}
+            )}
+          </div>
         </div>
+
+        {authUser && showPasswordForm && (
+          <form
+            onSubmit={handleChangePassword}
+            className="pt-4 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end"
+          >
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                Current Password
+              </label>
+              <input
+                type="password"
+                required
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-md"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                New Password (min 6 chars)
+              </label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-md"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="submit"
+                disabled={changingPassword}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-slate-900 rounded-md hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+              >
+                {changingPassword ? 'Updating...' : 'Save Password'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPasswordForm(false)}
+                className="px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 rounded-md hover:bg-slate-200 cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {resetNotice && (

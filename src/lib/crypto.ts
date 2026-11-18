@@ -164,26 +164,23 @@ export function generateCertificateCode(): string {
   return `VS-2026-${hex}`;
 }
 
+function getSessionTokenFallback(): string {
+  try {
+    return (
+      window.localStorage.getItem('veriseal_vps_session_token') ||
+      window.sessionStorage.getItem('veriseal_vps_session_token') ||
+      ''
+    );
+  } catch {
+    return '';
+  }
+}
+
 export async function generateAndSignNotarization(
   input: SealPayloadInput
 ): Promise<CryptographicSealResult> {
   const certificateCode = generateCertificateCode();
   const timestampIso = new Date().toISOString();
-
-  const keyPair = await window.crypto.subtle.generateKey(
-    {
-      name: 'ECDSA',
-      namedCurve: 'P-256',
-    },
-    true,
-    ['sign', 'verify']
-  );
-
-  const exportedJwk = await window.crypto.subtle.exportKey(
-    'jwk',
-    keyPair.publicKey
-  );
-  const publicKeyJwk = JSON.stringify(exportedJwk);
 
   const canonicalObject = {
     version: 'VERISEAL-TSP-1.0',
@@ -204,18 +201,66 @@ export async function generateAndSignNotarization(
   };
 
   const signedPayload = JSON.stringify(canonicalObject);
-  const encodedPayload = new TextEncoder().encode(signedPayload);
+  let publicKeyJwk = '';
+  let digitalSignature = '';
 
-  const signatureBuffer = await window.crypto.subtle.sign(
-    {
-      name: 'ECDSA',
-      hash: { name: 'SHA-256' },
-    },
-    keyPair.privateKey,
-    encodedPayload
-  );
+  if (typeof window !== 'undefined' && window.crypto?.subtle) {
+    const keyPair = await window.crypto.subtle.generateKey(
+      {
+        name: 'ECDSA',
+        namedCurve: 'P-256',
+      },
+      true,
+      ['sign', 'verify']
+    );
 
-  const digitalSignature = bufferToBase64(signatureBuffer);
+    const exportedJwk = await window.crypto.subtle.exportKey(
+      'jwk',
+      keyPair.publicKey
+    );
+    publicKeyJwk = JSON.stringify(exportedJwk);
+
+    const encodedPayload = new TextEncoder().encode(signedPayload);
+    const signatureBuffer = await window.crypto.subtle.sign(
+      {
+        name: 'ECDSA',
+        hash: { name: 'SHA-256' },
+      },
+      keyPair.privateKey,
+      encodedPayload
+    );
+
+    digitalSignature = bufferToBase64(signatureBuffer);
+  } else {
+    const token = getSessionTokenFallback();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+      headers['X-VeriSeal-Token'] = token;
+    }
+    const resp = await fetch('/api/crypto/sign', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers,
+      body: JSON.stringify({ payload: signedPayload }),
+    });
+    const data = (await resp.json().catch(() => ({}))) as {
+      ok?: boolean;
+      publicKeyJwk?: string;
+      digitalSignature?: string;
+      error?: string;
+    };
+    if (!resp.ok || !data.publicKeyJwk || !data.digitalSignature) {
+      throw new Error(
+        data.error || 'Unable to generate ECDSA-P256 cryptographic signature.'
+      );
+    }
+    publicKeyJwk = data.publicKeyJwk;
+    digitalSignature = data.digitalSignature;
+  }
+
   const sealedHash = await sha256Hex(`${signedPayload}|${digitalSignature}`);
 
   return {
@@ -235,30 +280,48 @@ export async function verifyNotarizationSignature(
   publicKeyJwkString: string
 ): Promise<boolean> {
   try {
-    const jwk = JSON.parse(publicKeyJwkString) as JsonWebKey;
-    const publicKey = await window.crypto.subtle.importKey(
-      'jwk',
-      jwk,
-      {
-        name: 'ECDSA',
-        namedCurve: 'P-256',
-      },
-      false,
-      ['verify']
-    );
+    if (typeof window !== 'undefined' && window.crypto?.subtle) {
+      const jwk = JSON.parse(publicKeyJwkString) as JsonWebKey;
+      const publicKey = await window.crypto.subtle.importKey(
+        'jwk',
+        jwk,
+        {
+          name: 'ECDSA',
+          namedCurve: 'P-256',
+        },
+        false,
+        ['verify']
+      );
 
-    const encodedPayload = new TextEncoder().encode(signedPayload);
-    const signatureBytes = base64ToUint8Array(digitalSignatureBase64);
+      const encodedPayload = new TextEncoder().encode(signedPayload);
+      const signatureBytes = base64ToUint8Array(digitalSignatureBase64);
 
-    return await window.crypto.subtle.verify(
-      {
-        name: 'ECDSA',
-        hash: { name: 'SHA-256' },
-      },
-      publicKey,
-      signatureBytes.buffer as ArrayBuffer,
-      encodedPayload
-    );
+      return await window.crypto.subtle.verify(
+        {
+          name: 'ECDSA',
+          hash: { name: 'SHA-256' },
+        },
+        publicKey,
+        signatureBytes.buffer as ArrayBuffer,
+        encodedPayload
+      );
+    }
+
+    const resp = await fetch('/api/crypto/verify', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        payload: signedPayload,
+        signature: digitalSignatureBase64,
+        publicKeyJwk: publicKeyJwkString,
+      }),
+    });
+    const data = (await resp.json().catch(() => ({}))) as {
+      ok?: boolean;
+      valid?: boolean;
+    };
+    return Boolean(resp.ok && data.ok && data.valid);
   } catch {
     return false;
   }

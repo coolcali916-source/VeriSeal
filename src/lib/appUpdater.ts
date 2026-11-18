@@ -108,7 +108,10 @@ export async function checkForAppUpdate(
       cache: 'no-store',
     });
     if (statusRes.ok) {
-      githubStatus = (await statusRes.json()) as GitHubUpdateStatus;
+      const ct = statusRes.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        githubStatus = (await statusRes.json()) as GitHubUpdateStatus;
+      }
     }
   } catch {
     // Fall back to /version.json check below
@@ -133,14 +136,17 @@ export async function checkForAppUpdate(
       },
     });
     if (res.ok) {
-      const remote = (await res.json()) as Partial<AppVersionManifest>;
-      if (remote.buildId) {
-        remoteBuild = {
-          version: String(remote.version || CURRENT_APP_BUILD.version),
-          buildId: String(remote.buildId),
-          builtAt: String(remote.builtAt || checkedAtIso),
-        };
-        buildChanged = remoteBuild.buildId !== CURRENT_APP_BUILD.buildId;
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const remote = (await res.json()) as Partial<AppVersionManifest>;
+        if (remote.buildId) {
+          remoteBuild = {
+            version: String(remote.version || CURRENT_APP_BUILD.version),
+            buildId: String(remote.buildId),
+            builtAt: String(remote.builtAt || checkedAtIso),
+          };
+          buildChanged = remoteBuild.buildId !== CURRENT_APP_BUILD.buildId;
+        }
       }
     }
   } catch {
@@ -165,7 +171,10 @@ export async function saveGitHubConfigOnServer(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ repo, branch }),
   });
-  const data = (await res.json()) as {
+  const data = (await res.json().catch(() => ({
+    ok: false,
+    error: 'Invalid server response.',
+  }))) as {
     ok: boolean;
     repoSlug?: string;
     branch?: string;

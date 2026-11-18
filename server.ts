@@ -1,10 +1,35 @@
 import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import {
+  changeUserPassword,
+  createCaseWithInitialCustody,
+  createFolder,
+  deleteDraftCase,
+  deleteFolder,
+  deleteSessionToken,
+  getDb,
+  getPublicVerification,
+  getUserBySessionToken,
+  getWorkspaceForUser,
+  hasAnyUsers,
+  loginLocalUser,
+  readCaseFileBytes,
+  registerLocalUser,
+  renameFolder,
+  sanitizeId,
+  sanitizePlacement,
+  saveCaseFileBytes,
+  saveUserProfile,
+  sealNotarizationCase,
+  updateCaseFields,
+  type LocalAuthUser,
+} from './server/localDb.ts';
 
 const execFileAsync = promisify(execFile);
 const ROOT_DIR = process.cwd();
@@ -284,6 +309,7 @@ function copyDirectorySyncFiltered(srcDir: string, destDir: string): void {
     '.env.production',
     'firebase-applet-config.json',
     '.veriseal-github.json',
+    '.veriseal-data',
   ]);
 
   const entries = fs.readdirSync(srcDir, { withFileTypes: true });
@@ -335,9 +361,605 @@ async function syncDependenciesAndBuild(packageJsonChanged: boolean) {
   return freshManifest;
 }
 
+const SESSION_COOKIE = 'veriseal_session';
+
+function parseCookies(req: Request): Record<string, string> {
+  const header = req.headers.cookie || '';
+  const out: Record<string, string> = {};
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function getSessionToken(req: Request): string {
+  const xToken = req.headers['x-veriseal-token'];
+  if (typeof xToken === 'string' && xToken.trim()) {
+    return xToken.trim();
+  }
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token) return token;
+  }
+  const cookies = parseCookies(req);
+  if (cookies[SESSION_COOKIE]) return cookies[SESSION_COOKIE];
+  if (typeof req.query.token === 'string' && req.query.token.trim()) {
+    return req.query.token.trim();
+  }
+  return '';
+}
+
+function isHttpsRequest(req: Request): boolean {
+  const proto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
+  return req.secure || proto.includes('https');
+}
+
+function setSessionCookie(req: Request, res: Response, token: string): void {
+  const https = isHttpsRequest(req);
+  res.cookie(SESSION_COOKIE, token, {
+    httpOnly: true,
+    path: '/',
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+    sameSite: https ? 'none' : 'lax',
+    secure: https,
+  });
+}
+
+function clearSessionCookie(req: Request, res: Response): void {
+  const https = isHttpsRequest(req);
+  res.clearCookie(SESSION_COOKIE, {
+    httpOnly: true,
+    path: '/',
+    sameSite: https ? 'none' : 'lax',
+    secure: https,
+  });
+}
+
+function resolveAuthUser(req: Request): LocalAuthUser | null {
+  const token = getSessionToken(req);
+  return getUserBySessionToken(token);
+}
+
 async function startServer() {
+  getDb();
   const app = express();
-  app.use(express.json({ limit: '64kb' }));
+
+  // Binary file upload/download on VPS disk (mounted before express.json)
+  app.post(
+    '/api/cases/:caseId/file',
+    express.raw({ type: '*/*', limit: '100mb' }),
+    (req: Request, res: Response) => {
+      const user = resolveAuthUser(req);
+      if (!user) {
+        res.status(401).json({ ok: false, error: 'Authentication required.' });
+        return;
+      }
+      const caseId = sanitizeId(req.params.caseId);
+      if (!caseId) {
+        res.status(400).json({ ok: false, error: 'Invalid case ID.' });
+        return;
+      }
+      if (!Buffer.isBuffer(req.body) || req.body.byteLength === 0) {
+        res.status(400).json({ ok: false, error: 'Empty file payload.' });
+        return;
+      }
+      try {
+        saveCaseFileBytes(user.uid, caseId, req.body);
+        res.json({ ok: true, bytesSaved: req.body.byteLength });
+      } catch (err) {
+        res.status(400).json({
+          ok: false,
+          error: err instanceof Error ? err.message : 'Unable to store file.',
+        });
+      }
+    }
+  );
+
+  app.get('/api/cases/:caseId/file', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const caseId = sanitizeId(req.params.caseId);
+    if (!caseId) {
+      res.status(400).json({ ok: false, error: 'Invalid case ID.' });
+      return;
+    }
+    const file = readCaseFileBytes(user.uid, caseId);
+    if (!file) {
+      res.status(404).json({ ok: false, error: 'File not found on server.' });
+      return;
+    }
+    res.setHeader('Content-Type', file.fileType);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(file.bytes);
+  });
+
+  app.use(express.json({ limit: '5mb' }));
+
+  // Self-Hosted Local Authentication Endpoints (Zero cloud dependencies)
+  app.get('/api/auth/me', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    res.json({
+      ok: true,
+      user,
+      hasAnyUsers: hasAnyUsers(),
+    });
+  });
+
+  app.post('/api/auth/register', (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as {
+        fullName?: string;
+        email?: string;
+        password?: string;
+      };
+      const result = registerLocalUser({
+        fullName: String(body.fullName || ''),
+        email: String(body.email || ''),
+        password: String(body.password || ''),
+      });
+      setSessionCookie(req, res, result.token);
+      res.json({ ok: true, user: result.user, token: result.token });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Registration failed.',
+      });
+    }
+  });
+
+  app.post('/api/auth/login', (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as { email?: string; password?: string };
+      const result = loginLocalUser({
+        email: String(body.email || ''),
+        password: String(body.password || ''),
+      });
+      setSessionCookie(req, res, result.token);
+      res.json({ ok: true, user: result.user, token: result.token });
+    } catch (err) {
+      res.status(401).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Sign-in failed.',
+      });
+    }
+  });
+
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    const token = getSessionToken(req);
+    if (token) deleteSessionToken(token);
+    clearSessionCookie(req, res);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/auth/change-password', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const body = (req.body || {}) as {
+        currentPassword?: string;
+        newPassword?: string;
+      };
+      changeUserPassword({
+        uid: user.uid,
+        currentPassword: String(body.currentPassword || ''),
+        newPassword: String(body.newPassword || ''),
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to update password.',
+      });
+    }
+  });
+
+  // Self-Hosted Workspace Data Endpoints
+  app.get('/api/workspace', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const workspace = getWorkspaceForUser(user);
+    res.json({ ok: true, ...workspace });
+  });
+
+  app.put('/api/profile', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const profile = saveUserProfile(user.uid, req.body || {});
+      res.json({ ok: true, profile });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to save profile.',
+      });
+    }
+  });
+
+  app.post('/api/folders', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const body = (req.body || {}) as { id?: string; name?: string };
+    const folder = createFolder(user.uid, String(body.name || ''), body.id);
+    res.json({ ok: true, folder });
+  });
+
+  app.patch('/api/folders/:folderId', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const folderId = sanitizeId(req.params.folderId);
+    if (!folderId) {
+      res.status(400).json({ ok: false, error: 'Invalid folder ID.' });
+      return;
+    }
+    const body = (req.body || {}) as { name?: string };
+    const folder = renameFolder(user.uid, folderId, String(body.name || ''));
+    if (!folder) {
+      res.status(404).json({ ok: false, error: 'Folder not found.' });
+      return;
+    }
+    res.json({ ok: true, folder });
+  });
+
+  app.delete('/api/folders/:folderId', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const folderId = sanitizeId(req.params.folderId);
+    if (!folderId) {
+      res.status(400).json({ ok: false, error: 'Invalid folder ID.' });
+      return;
+    }
+    deleteFolder(user.uid, folderId);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/cases', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const body = (req.body || {}) as {
+        id?: string;
+        folderId?: string;
+        title?: string;
+        fileName?: string;
+        fileType?: string;
+        fileSize?: number;
+        actType?: string;
+        notarizationMode?: 'online' | 'in_person';
+        meetingLocation?: string;
+        signerName?: string;
+        signerEmail?: string;
+        documentText?: string;
+        documentHash?: string;
+        feeCents?: number;
+        includeCertifiedLogo?: boolean;
+        includeNotarizedMark?: boolean;
+        placement?: unknown;
+        custodyEvent?: {
+          id?: string;
+          step?: string;
+          actor?: string;
+          details?: string;
+          eventHash?: string;
+        };
+      };
+      const result = createCaseWithInitialCustody({
+        uid: user.uid,
+        caseData: {
+          id: body.id,
+          folderId: String(body.folderId || 'unfiled'),
+          title: String(body.title || ''),
+          fileName: String(body.fileName || ''),
+          fileType: String(body.fileType || 'text/plain'),
+          fileSize: Number(body.fileSize || 0),
+          actType: String(body.actType || 'Acknowledgment'),
+          notarizationMode:
+            body.notarizationMode === 'in_person' ? 'in_person' : 'online',
+          meetingLocation: String(body.meetingLocation || ''),
+          signerName: String(body.signerName || ''),
+          signerEmail: String(body.signerEmail || ''),
+          documentText: String(body.documentText || ''),
+          documentHash: String(body.documentHash || ''),
+          feeCents: Number(body.feeCents || 0),
+          includeCertifiedLogo: body.includeCertifiedLogo !== false,
+          includeNotarizedMark: body.includeNotarizedMark !== false,
+          placement: body.placement,
+        },
+        custodyEvent: {
+          id: body.custodyEvent?.id,
+          step: String(body.custodyEvent?.step || 'Document Uploaded & Hashed'),
+          actor: String(body.custodyEvent?.actor || body.signerName || 'Signer'),
+          details: String(body.custodyEvent?.details || body.fileName || ''),
+          eventHash: String(body.custodyEvent?.eventHash || ''),
+        },
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to create case.',
+      });
+    }
+  });
+
+  app.patch('/api/cases/:caseId', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const caseId = sanitizeId(req.params.caseId);
+    if (!caseId) {
+      res.status(400).json({ ok: false, error: 'Invalid case ID.' });
+      return;
+    }
+    try {
+      const body = (req.body || {}) as {
+        folderId?: string;
+        notarizationMode?: 'online' | 'in_person';
+        meetingLocation?: string;
+        status?: 'draft' | 'identity_verified' | 'signed';
+        idMethod?: string;
+        idScore?: number;
+        kbaPassed?: boolean;
+        signerSignatureData?: string;
+        signatureType?: 'none' | 'drawn' | 'typed';
+        includeCertifiedLogo?: boolean;
+        includeNotarizedMark?: boolean;
+        placement?: unknown;
+        custodyEvent?: {
+          step: string;
+          actor: string;
+          details: string;
+          eventHash: string;
+        };
+      };
+
+      const patch: Parameters<typeof updateCaseFields>[2] = {};
+      if (body.folderId !== undefined) patch.folderId = String(body.folderId);
+      if (body.notarizationMode !== undefined) {
+        patch.notarizationMode =
+          body.notarizationMode === 'in_person' ? 'in_person' : 'online';
+      }
+      if (body.meetingLocation !== undefined) {
+        patch.meetingLocation = String(body.meetingLocation);
+      }
+      if (
+        body.status === 'draft' ||
+        body.status === 'identity_verified' ||
+        body.status === 'signed'
+      ) {
+        patch.status = body.status;
+      }
+      if (body.idMethod !== undefined) patch.idMethod = String(body.idMethod);
+      if (body.idScore !== undefined) patch.idScore = Number(body.idScore);
+      if (body.kbaPassed !== undefined) patch.kbaPassed = Boolean(body.kbaPassed);
+      if (body.signerSignatureData !== undefined) {
+        patch.signerSignatureData = String(body.signerSignatureData);
+      }
+      if (
+        body.signatureType === 'none' ||
+        body.signatureType === 'drawn' ||
+        body.signatureType === 'typed'
+      ) {
+        patch.signatureType = body.signatureType;
+      }
+      if (body.includeCertifiedLogo !== undefined) {
+        patch.includeCertifiedLogo = Boolean(body.includeCertifiedLogo);
+      }
+      if (body.includeNotarizedMark !== undefined) {
+        patch.includeNotarizedMark = Boolean(body.includeNotarizedMark);
+      }
+      if (body.placement !== undefined) {
+        patch.placement = sanitizePlacement(body.placement);
+      }
+
+      const result = updateCaseFields(user.uid, caseId, patch, body.custodyEvent);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to update case.',
+      });
+    }
+  });
+
+  app.delete('/api/cases/:caseId', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const caseId = sanitizeId(req.params.caseId);
+    if (!caseId) {
+      res.status(400).json({ ok: false, error: 'Invalid case ID.' });
+      return;
+    }
+    try {
+      deleteDraftCase(user.uid, caseId);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to delete case.',
+      });
+    }
+  });
+
+  app.post('/api/cases/:caseId/seal', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    const caseId = sanitizeId(req.params.caseId);
+    if (!caseId) {
+      res.status(400).json({ ok: false, error: 'Invalid case ID.' });
+      return;
+    }
+    try {
+      const body = (req.body || {}) as {
+        notaryName?: string;
+        notaryCommission?: string;
+        notaryJurisdiction?: string;
+        notaryExpires?: string;
+        notaryStampDataUrl?: string;
+        includeCertifiedLogo?: boolean;
+        includeNotarizedMark?: boolean;
+        certificateCode?: string;
+        sealedHash?: string;
+        signatureAlgorithm?: string;
+        publicKeyJwk?: string;
+        digitalSignature?: string;
+        signedPayload?: string;
+        timestampIso?: string;
+        custodyEventHash?: string;
+      };
+      const result = sealNotarizationCase({
+        uid: user.uid,
+        caseId,
+        notaryName: String(body.notaryName || ''),
+        notaryCommission: String(body.notaryCommission || ''),
+        notaryJurisdiction: String(body.notaryJurisdiction || ''),
+        notaryExpires: String(body.notaryExpires || ''),
+        notaryStampDataUrl: String(body.notaryStampDataUrl || ''),
+        includeCertifiedLogo: body.includeCertifiedLogo !== false,
+        includeNotarizedMark: body.includeNotarizedMark !== false,
+        certificateCode: String(body.certificateCode || ''),
+        sealedHash: String(body.sealedHash || ''),
+        signatureAlgorithm: String(body.signatureAlgorithm || ''),
+        publicKeyJwk: String(body.publicKeyJwk || ''),
+        digitalSignature: String(body.digitalSignature || ''),
+        signedPayload: String(body.signedPayload || ''),
+        timestampIso: String(body.timestampIso || new Date().toISOString()),
+        custodyEventHash: String(body.custodyEventHash || ''),
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to seal document.',
+      });
+    }
+  });
+
+  // Public verification lookup (no login required for third-party verifiers)
+  app.get('/api/verifications/:code', (req: Request, res: Response) => {
+    const code = String(req.params.code || '').trim().toUpperCase();
+    const record = getPublicVerification(code);
+    if (!record) {
+      res.status(404).json({ ok: false, error: 'Certificate code not found.' });
+      return;
+    }
+    res.json({ ok: true, verification: record });
+  });
+
+  // Server-assisted ECDSA P-256 fallback for plain HTTP contexts (where window.crypto.subtle is unavailable)
+  app.post('/api/crypto/sign', (req: Request, res: Response) => {
+    const user = resolveAuthUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const body = (req.body || {}) as { payload?: string };
+      const payload = typeof body.payload === 'string' ? body.payload : '';
+      if (!payload) {
+        res.status(400).json({ ok: false, error: 'Payload is required.' });
+        return;
+      }
+      const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'prime256v1',
+      });
+      const jwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
+      const publicJwk = {
+        kty: jwk.kty || 'EC',
+        crv: jwk.crv || 'P-256',
+        x: jwk.x,
+        y: jwk.y,
+        ext: true,
+        key_ops: ['verify'],
+      };
+      const sigBuffer = crypto.sign(
+        'sha256',
+        Buffer.from(payload, 'utf8'),
+        {
+          key: privateKey,
+          dsaEncoding: 'ieee-p1363',
+        }
+      );
+      res.json({
+        ok: true,
+        publicKeyJwk: JSON.stringify(publicJwk),
+        digitalSignature: sigBuffer.toString('base64'),
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to sign payload.',
+      });
+    }
+  });
+
+  app.post('/api/crypto/verify', (req: Request, res: Response) => {
+    try {
+      const body = (req.body || {}) as {
+        payload?: string;
+        signature?: string;
+        publicKeyJwk?: string;
+      };
+      if (!body.payload || !body.signature || !body.publicKeyJwk) {
+        res.json({ ok: true, valid: false });
+        return;
+      }
+      const jwk = JSON.parse(body.publicKeyJwk) as crypto.JsonWebKey;
+      const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+      const valid = crypto.verify(
+        'sha256',
+        Buffer.from(body.payload, 'utf8'),
+        {
+          key: publicKey,
+          dsaEncoding: 'ieee-p1363',
+        },
+        Buffer.from(body.signature, 'base64')
+      );
+      res.json({ ok: true, valid: Boolean(valid) });
+    } catch {
+      res.json({ ok: true, valid: false });
+    }
+  });
 
   // Serve refreshed version.json when an update/rebuild occurred at runtime
   app.get('/version.json', (_req: Request, res: Response, next) => {

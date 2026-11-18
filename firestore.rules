@@ -341,7 +341,7 @@ service cloud.firestore {
         incoming().ownerId == request.auth.uid &&
         incoming().fileType.size() >= 1 &&
         incoming().signerEmail.size() >= 3 &&
-        incoming().documentText.size() <= 60000 &&
+        incoming().documentText.size() <= 500000 &&
         incoming().status == 'draft' &&
         incoming().kbaPassed == false &&
         incoming().signatureType == 'none' &&
@@ -452,12 +452,10 @@ service cloud.firestore {
           incoming().caseId == caseId &&
           incoming().ownerId == request.auth.uid &&
           incoming().recordedAt == request.time &&
+          exists(/databases/$(database)/documents/notarizations/$(caseId)) &&
           (
-            (
-              exists(/databases/$(database)/documents/notarizations/$(caseId)) &&
-              get(/databases/$(database)/documents/notarizations/$(caseId)).data.ownerId == request.auth.uid
-            ) ||
-            getAfter(/databases/$(database)/documents/notarizations/$(caseId)).data.ownerId == request.auth.uid
+            get(/databases/$(database)/documents/notarizations/$(caseId)).data.ownerId == request.auth.uid ||
+            isAdmin()
           );
         allow update, delete: if isAdmin();
       }
@@ -472,8 +470,12 @@ service cloud.firestore {
         incoming().id == entryId &&
         incoming().ownerId == request.auth.uid &&
         incoming().recordedAt == request.time &&
-        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.ownerId == request.auth.uid &&
-        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.status == 'notarized';
+        exists(/databases/$(database)/documents/notarizations/$(incoming().caseId)) &&
+        (
+          get(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.ownerId == request.auth.uid ||
+          isAdmin()
+        ) &&
+        get(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.status == 'notarized';
       allow update, delete: if isAdmin();
     }
 
@@ -486,8 +488,12 @@ service cloud.firestore {
         incoming().certificateCode == certificateCode &&
         incoming().ownerId == request.auth.uid &&
         incoming().notarizedAt == request.time &&
-        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.ownerId == request.auth.uid &&
-        getAfter(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.status == 'notarized';
+        exists(/databases/$(database)/documents/notarizations/$(incoming().caseId)) &&
+        (
+          get(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.ownerId == request.auth.uid ||
+          isAdmin()
+        ) &&
+        get(/databases/$(database)/documents/notarizations/$(incoming().caseId)).data.status == 'notarized';
       allow update, delete: if isAdmin();
     }
   }

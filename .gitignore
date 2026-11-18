@@ -7,3 +7,6 @@ coverage/
 .env*
 !.env.example
 .veriseal-github.json
+.veriseal-data/
+php-host/api/config.php
+.veriseal-deploy/

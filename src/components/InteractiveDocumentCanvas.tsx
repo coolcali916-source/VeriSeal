@@ -18,7 +18,11 @@ import {
   type NotarizationCase,
   type UserProfile,
 } from '../types/notary';
-import { loadLocalDocumentFile } from '../lib/localFileStore';
+import {
+  loadLocalDocumentFile,
+  saveLocalDocumentFile,
+} from '../lib/localFileStore';
+import { apiDownloadCaseFileBytes } from '../lib/localApi';
 import { formatFileSize } from '../lib/documentParser';
 import { NotarySealSvg } from './NotarySealSvg';
 import {
@@ -333,6 +337,32 @@ export const InteractiveDocumentCanvas: React.FC<
             if (isPdfFile) {
               pdfBytes = new Uint8Array(cached.arrayBuffer);
             }
+          }
+        }
+
+        if (
+          ((!pdfBytes && isPdfFile) || (!nextResolvedUrl && isImageFile)) &&
+          !activeCase.id.startsWith('case_demo_')
+        ) {
+          const remote = await apiDownloadCaseFileBytes(activeCase.id);
+          if (isStale()) return;
+          if (remote && remote.arrayBuffer.byteLength > 0) {
+            const blob = new Blob([remote.arrayBuffer], {
+              type: activeCase.fileType || remote.contentType,
+            });
+            createdObjectUrl = URL.createObjectURL(blob);
+            nextResolvedUrl = createdObjectUrl;
+            if (isPdfFile) {
+              pdfBytes = new Uint8Array(remote.arrayBuffer);
+            }
+            const fileForCache = new File([blob], activeCase.fileName, {
+              type: activeCase.fileType || remote.contentType,
+            });
+            void saveLocalDocumentFile(
+              activeCase.id,
+              activeCase.documentHash,
+              fileForCache
+            );
           }
         }
 

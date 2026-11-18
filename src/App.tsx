@@ -1,20 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-  Timestamp,
-  updateDoc,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
+import { useEffect, useMemo, useState } from 'react';
 import {
   BookOpen,
   FileCheck2,
@@ -27,12 +11,20 @@ import {
   X,
 } from 'lucide-react';
 import {
-  auth,
-  db,
-  handleFirestoreError,
-  OperationType,
-  testFirestoreConnection,
-} from './lib/firebase';
+  apiCreateCase,
+  apiCreateFolder,
+  apiDeleteCase,
+  apiDeleteFolder,
+  apiRenameFolder,
+  apiSaveProfile,
+  apiSealCase,
+  apiUpdateCase,
+  apiUploadCaseFile,
+  authLogout,
+  authMe,
+  fetchWorkspace,
+  type AuthUser,
+} from './lib/localApi';
 import {
   computeCustodyEventHash,
   generateAndSignNotarization,
@@ -85,38 +77,6 @@ function makeId(prefix: string): string {
   return `${prefix}_${hex}`;
 }
 
-function tsToIso(value: unknown): string {
-  if (value instanceof Timestamp) {
-    return value.toDate().toISOString();
-  }
-  if (typeof value === 'string' && value.length > 0) {
-    return value;
-  }
-  return new Date().toISOString();
-}
-
-function parsePlacement(raw: unknown): DocumentPlacement | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const obj = raw as Record<string, unknown>;
-  const sig = obj.signature as Record<string, unknown> | undefined;
-  const stamp = obj.stamp as Record<string, unknown> | undefined;
-  if (!sig || !stamp) return undefined;
-  return {
-    signature: {
-      page: Math.max(1, Math.round(Number(sig.page) || 1)),
-      xPct: Number(sig.xPct ?? DEFAULT_DOCUMENT_PLACEMENT.signature.xPct),
-      yPct: Number(sig.yPct ?? DEFAULT_DOCUMENT_PLACEMENT.signature.yPct),
-      scale: Number(sig.scale ?? DEFAULT_DOCUMENT_PLACEMENT.signature.scale),
-    },
-    stamp: {
-      page: Math.max(1, Math.round(Number(stamp.page) || 1)),
-      xPct: Number(stamp.xPct ?? DEFAULT_DOCUMENT_PLACEMENT.stamp.xPct),
-      yPct: Number(stamp.yPct ?? DEFAULT_DOCUMENT_PLACEMENT.stamp.yPct),
-      scale: Number(stamp.scale ?? DEFAULT_DOCUMENT_PLACEMENT.stamp.scale),
-    },
-  };
-}
-
 const DEFAULT_PROFILE: UserProfile = {
   uid: 'local_preview',
   displayName: 'Elena Vance',
@@ -132,7 +92,8 @@ const DEFAULT_PROFILE: UserProfile = {
 };
 
 export default function App() {
-  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [hasAnyUsers, setHasAnyUsers] = useState(true);
   const [authReady, setAuthReady] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -155,19 +116,6 @@ export default function App() {
   >({});
   const [previewUrlsByCase, setPreviewUrlsByCase] = useState<
     Record<string, string>
-  >({});
-  const pendingPlacementByCaseRef = useRef<
-    Record<string, { placement: DocumentPlacement; ts: number }>
-  >({});
-  const pendingModeByCaseRef = useRef<
-    Record<
-      string,
-      {
-        notarizationMode: NotarizationMode;
-        meetingLocation: string;
-        ts: number;
-      }
-    >
   >({});
 
   // App Update State
@@ -224,20 +172,29 @@ export default function App() {
     };
   }, []);
 
-  // Boot Firestore connection check + initial sandbox seed
+  // Check self-hosted VPS session on startup
   useEffect(() => {
-    void testFirestoreConnection();
-
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      setAuthReady(true);
-    });
-    return () => unsubAuth();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authMe();
+        if (cancelled) return;
+        setAuthUser(res.user);
+        setHasAnyUsers(res.hasAnyUsers);
+      } catch (err) {
+        console.error('Auth session check failed:', err);
+      } finally {
+        if (!cancelled) setAuthReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Initialize Local Preview Mode when signed out
   useEffect(() => {
-    if (!authReady || firebaseUser) return;
+    if (!authReady || authUser) return;
 
     let cancelled = false;
     const initSandbox = async () => {
@@ -473,287 +430,38 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authReady, firebaseUser]);
+  }, [authReady, authUser]);
 
-  // Firestore Real-time Sync when authenticated
+  // Load Self-Hosted VPS Workspace when authenticated
   useEffect(() => {
-    if (!authReady || !firebaseUser) return;
-    const uid = firebaseUser.uid;
+    if (!authReady || !authUser) return;
+    let cancelled = false;
 
-    // 1. Bootstrap or subscribe to userProfiles/{uid}
-    const profileRef = doc(db, 'userProfiles', uid);
-    void (async () => {
+    const loadWorkspace = async () => {
       try {
-        const snap = await getDoc(profileRef);
-        if (!snap.exists()) {
-          await setDoc(profileRef, {
-            uid,
-            displayName:
-              (firebaseUser.displayName || '').trim().slice(0, 100) ||
-              'Notary User',
-            email: (firebaseUser.email || '').trim().slice(0, 180),
-            phone: '',
-            location: 'San Francisco, CA',
-            commissionNumber: 'CA-2491804',
-            commissionJurisdiction: 'State of California',
-            commissionExpires: '2028-09-30',
-            customStampDataUrl: '',
-            savedSignatureData: '',
-            savedSignatureType: 'none',
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
-      } catch (err) {
-        console.error('Failed to initialize user profile:', err);
-      }
-    })();
-
-    const unsubProfile = onSnapshot(
-      profileRef,
-      (snap) => {
-        if (snap.exists()) {
-          const d = snap.data();
-          const sigType =
-            d.savedSignatureType === 'drawn' || d.savedSignatureType === 'typed'
-              ? d.savedSignatureType
-              : 'none';
-          setUserProfile({
-            uid: String(d.uid),
-            displayName: String(d.displayName || ''),
-            email: String(d.email || ''),
-            phone: String(d.phone || ''),
-            location: String(d.location || ''),
-            commissionNumber: String(d.commissionNumber || ''),
-            commissionJurisdiction: String(d.commissionJurisdiction || ''),
-            commissionExpires: String(d.commissionExpires || ''),
-            customStampDataUrl: String(d.customStampDataUrl || ''),
-            savedSignatureData: String(d.savedSignatureData || ''),
-            savedSignatureType: sigType,
-            createdAtIso: tsToIso(d.createdAt),
-            updatedAtIso: tsToIso(d.updatedAt),
-          });
-        }
-      },
-      (err) =>
-        handleFirestoreError(err, OperationType.GET, `userProfiles/${uid}`)
-    );
-
-    // 2. Subscribe to folders
-    const foldersQuery = query(
-      collection(db, 'folders'),
-      where('ownerId', '==', uid)
-    );
-    let foldersBootstrapped = false;
-    const unsubFolders = onSnapshot(
-      foldersQuery,
-      (snap) => {
-        const list: DocumentFolder[] = snap.docs.map((docSnap) => {
-          const d = docSnap.data();
-          return {
-            id: docSnap.id,
-            ownerId: String(d.ownerId),
-            name: String(d.name),
-            createdAtIso: tsToIso(d.createdAt),
-            updatedAtIso: tsToIso(d.updatedAt),
-          };
-        });
-        list.sort((a, b) => a.name.localeCompare(b.name));
-        setFolders(list);
-
-        if (list.length === 0 && !foldersBootstrapped) {
-          foldersBootstrapped = true;
-          const batch = writeBatch(db);
-          DEFAULT_FOLDER_NAMES.forEach((name) => {
-            const id = makeId('fld');
-            batch.set(doc(db, 'folders', id), {
-              id,
-              ownerId: uid,
-              name,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
-          });
-          void batch.commit().catch((err) =>
-            handleFirestoreError(err, OperationType.WRITE, 'folders')
-          );
-        }
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'folders')
-    );
-
-    // 3. Subscribe to notarizations
-    const casesQuery = query(
-      collection(db, 'notarizations'),
-      where('ownerId', '==', uid)
-    );
-    const unsubCases = onSnapshot(
-      casesQuery,
-      (snap) => {
-        const list: NotarizationCase[] = snap.docs.map((docSnap) => {
-          const d = docSnap.data();
-          return {
-            id: docSnap.id,
-            ownerId: String(d.ownerId),
-            folderId: String(d.folderId || 'unfiled'),
-            title: String(d.title),
-            fileName: String(d.fileName),
-            fileType: String(d.fileType),
-            fileSize: Number(d.fileSize || 0),
-            actType: d.actType as NotarialActType,
-            notarizationMode: (() => {
-              const serverMode: NotarizationMode =
-                d.notarizationMode === 'in_person' ? 'in_person' : 'online';
-              const pending = pendingModeByCaseRef.current[docSnap.id];
-              if (pending && Date.now() - pending.ts < 8000) {
-                if (
-                  !docSnap.metadata.hasPendingWrites &&
-                  serverMode === pending.notarizationMode
-                ) {
-                  delete pendingModeByCaseRef.current[docSnap.id];
-                  return serverMode;
-                }
-                return pending.notarizationMode;
-              }
-              return serverMode;
-            })(),
-            meetingLocation: (() => {
-              const serverLoc = String(d.meetingLocation || '');
-              const pending = pendingModeByCaseRef.current[docSnap.id];
-              if (pending && Date.now() - pending.ts < 8000) {
-                return pending.meetingLocation;
-              }
-              return serverLoc;
-            })(),
-            status: d.status,
-            signerName: String(d.signerName),
-            signerEmail: String(d.signerEmail),
-            documentText: String(d.documentText),
-            documentHash: String(d.documentHash),
-            idMethod: String(d.idMethod || ''),
-            idScore: Number(d.idScore || 0),
-            kbaPassed: Boolean(d.kbaPassed),
-            signerSignatureData: String(d.signerSignatureData || ''),
-            signatureType: d.signatureType as SignatureType,
-            notaryName: String(d.notaryName || ''),
-            notaryCommission: String(d.notaryCommission || ''),
-            notaryJurisdiction: String(d.notaryJurisdiction || ''),
-            notaryExpires: String(d.notaryExpires || ''),
-            notaryStampDataUrl: String(d.notaryStampDataUrl || ''),
-            includeCertifiedLogo: d.includeCertifiedLogo !== false,
-            includeNotarizedMark: d.includeNotarizedMark !== false,
-            placement: (() => {
-              const serverPlacement =
-                parsePlacement(d.placement) || DEFAULT_DOCUMENT_PLACEMENT;
-              const pending = pendingPlacementByCaseRef.current[docSnap.id];
-              if (pending && Date.now() - pending.ts < 8000) {
-                if (
-                  !docSnap.metadata.hasPendingWrites &&
-                  JSON.stringify(serverPlacement) ===
-                    JSON.stringify(pending.placement)
-                ) {
-                  delete pendingPlacementByCaseRef.current[docSnap.id];
-                  return serverPlacement;
-                }
-                return pending.placement;
-              }
-              return serverPlacement;
-            })(),
-            certificateCode: String(d.certificateCode || ''),
-            sealedHash: String(d.sealedHash || ''),
-            signatureAlgorithm: String(d.signatureAlgorithm || ''),
-            publicKeyJwk: String(d.publicKeyJwk || ''),
-            digitalSignature: String(d.digitalSignature || ''),
-            signedPayload: String(d.signedPayload || ''),
-            timestampIso: String(d.timestampIso || ''),
-            feeCents: Number(d.feeCents || 0),
-            createdAtIso: tsToIso(d.createdAt),
-            updatedAtIso: tsToIso(d.updatedAt),
-            notarizedAtIso: d.notarizedAt ? tsToIso(d.notarizedAt) : undefined,
-          };
-        });
-        list.sort((a, b) => b.updatedAtIso.localeCompare(a.updatedAtIso));
-        setCases(list);
+        const snap = await fetchWorkspace();
+        if (cancelled) return;
+        setUserProfile(snap.profile);
+        setFolders(snap.folders);
+        setCases(snap.cases);
+        setJournalEntries(snap.journalEntries);
+        setCustodyByCase(snap.custodyByCase);
+        setLocalVerifications(snap.verifications);
         setActiveCaseId((prev) =>
-          prev && list.some((c) => c.id === prev) ? prev : list[0]?.id || null
+          prev && snap.cases.some((c) => c.id === prev)
+            ? prev
+            : snap.cases[0]?.id || null
         );
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'notarizations')
-    );
-
-    // 4. Subscribe to journalEntries
-    const journalQuery = query(
-      collection(db, 'journalEntries'),
-      where('ownerId', '==', uid)
-    );
-    const unsubJournal = onSnapshot(
-      journalQuery,
-      (snap) => {
-        const list: JournalEntry[] = snap.docs.map((docSnap) => {
-          const d = docSnap.data();
-          return {
-            id: docSnap.id,
-            ownerId: String(d.ownerId),
-            caseId: String(d.caseId),
-            entryNumber: String(d.entryNumber),
-            documentTitle: String(d.documentTitle),
-            fileName: String(d.fileName),
-            actType: d.actType as NotarialActType,
-            notarizationMode:
-              d.notarizationMode === 'in_person' ? 'in_person' : 'online',
-            meetingLocation: String(d.meetingLocation || ''),
-            signerName: String(d.signerName),
-            idMethod: String(d.idMethod),
-            certificateCode: String(d.certificateCode),
-            sealedHash: String(d.sealedHash),
-            timestampIso: String(d.timestampIso),
-            feeCents: Number(d.feeCents || 0),
-            recordedAtIso: tsToIso(d.recordedAt),
-          };
-        });
-        list.sort((a, b) => b.recordedAtIso.localeCompare(a.recordedAtIso));
-        setJournalEntries(list);
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, 'journalEntries')
-    );
-
-    return () => {
-      unsubProfile();
-      unsubFolders();
-      unsubCases();
-      unsubJournal();
+      } catch (err) {
+        console.error('Failed to load self-hosted workspace:', err);
+      }
     };
-  }, [authReady, firebaseUser]);
 
-  // Subscribe to custodyEvents for active case when signed in
-  useEffect(() => {
-    if (!authReady || !firebaseUser || !activeCaseId) return;
-    if (activeCaseId.startsWith('case_demo_')) return;
-
-    const path = `notarizations/${activeCaseId}/custodyEvents`;
-    const q = query(collection(db, path), orderBy('recordedAt', 'asc'));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const events: CustodyEvent[] = snap.docs.map((docSnap) => {
-          const d = docSnap.data();
-          return {
-            id: docSnap.id,
-            ownerId: String(d.ownerId),
-            caseId: String(d.caseId),
-            step: String(d.step),
-            actor: String(d.actor),
-            details: String(d.details),
-            eventHash: String(d.eventHash),
-            recordedAtIso: tsToIso(d.recordedAt),
-          };
-        });
-        setCustodyByCase((prev) => ({ ...prev, [activeCaseId]: events }));
-      },
-      (err) => handleFirestoreError(err, OperationType.LIST, path)
-    );
-    return () => unsub();
-  }, [authReady, firebaseUser, activeCaseId]);
+    void loadWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, authUser]);
 
   const activeCase = useMemo(
     () => cases.find((c) => c.id === activeCaseId) || null,
@@ -765,19 +473,11 @@ export default function App() {
     const id = makeId('fld');
     const safeName = name.trim().slice(0, 60) || 'Untitled Folder';
     const nowIso = new Date().toISOString();
-    if (firebaseUser) {
-      const path = `folders/${id}`;
-      try {
-        await setDoc(doc(db, 'folders', id), {
-          id,
-          ownerId: firebaseUser.uid,
-          name: safeName,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, path);
-      }
+    if (authUser) {
+      const folder = await apiCreateFolder(safeName, id);
+      setFolders((prev) =>
+        [...prev, folder].sort((a, b) => a.name.localeCompare(b.name))
+      );
     } else {
       setFolders((prev) => [
         ...prev,
@@ -794,16 +494,13 @@ export default function App() {
 
   const handleRenameFolder = async (folderId: string, name: string) => {
     const safeName = name.trim().slice(0, 60) || 'Untitled Folder';
-    if (firebaseUser) {
-      const path = `folders/${folderId}`;
-      try {
-        await updateDoc(doc(db, 'folders', folderId), {
-          name: safeName,
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, path);
-      }
+    if (authUser) {
+      const updated = await apiRenameFolder(folderId, safeName);
+      setFolders((prev) =>
+        prev
+          .map((f) => (f.id === folderId ? updated : f))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
     } else {
       setFolders((prev) =>
         prev.map((f) =>
@@ -816,16 +513,10 @@ export default function App() {
   };
 
   const handleDeleteFolder = async (folderId: string) => {
-    if (firebaseUser) {
-      const path = `folders/${folderId}`;
-      try {
-        await deleteDoc(doc(db, 'folders', folderId));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, path);
-      }
-    } else {
-      setFolders((prev) => prev.filter((f) => f.id !== folderId));
+    if (authUser) {
+      await apiDeleteFolder(folderId);
     }
+    setFolders((prev) => prev.filter((f) => f.id !== folderId));
     if (activeFolderId === folderId) setActiveFolderId('all');
   };
 
@@ -869,117 +560,87 @@ export default function App() {
       await saveLocalDocumentFile(caseId, payload.documentHash, payload.uploadedFile);
     }
 
-    const optimisticCase: NotarizationCase = {
-      id: caseId,
-      ownerId: firebaseUser?.uid || 'local_preview',
-      folderId: payload.folderId || 'unfiled',
-      title: payload.title,
-      fileName: payload.fileName,
-      fileType: payload.fileType,
-      fileSize: payload.fileSize,
-      actType: payload.actType,
-      notarizationMode: payload.notarizationMode,
-      meetingLocation: payload.meetingLocation,
-      status: 'draft',
-      signerName: payload.signerName,
-      signerEmail: payload.signerEmail,
-      documentText: payload.documentText,
-      documentHash: payload.documentHash,
-      idMethod:
-        payload.notarizationMode === 'in_person'
-          ? 'Physical Government Photo ID'
-          : 'Government Photo ID + KBA',
-      idScore: 0,
-      kbaPassed: false,
-      signerSignatureData: '',
-      signatureType: 'none',
-      notaryName: '',
-      notaryCommission: '',
-      notaryJurisdiction: '',
-      notaryExpires: '',
-      notaryStampDataUrl: '',
-      includeCertifiedLogo: payload.includeCertifiedLogo,
-      includeNotarizedMark: payload.includeNotarizedMark,
-      placement: DEFAULT_DOCUMENT_PLACEMENT,
-      certificateCode: '',
-      sealedHash: '',
-      signatureAlgorithm: '',
-      publicKeyJwk: '',
-      digitalSignature: '',
-      signedPayload: '',
-      timestampIso: '',
-      feeCents: payload.feeCents,
-      createdAtIso: nowIso,
-      updatedAtIso: nowIso,
-    };
-
-    if (firebaseUser) {
-      const uid = firebaseUser.uid;
-      try {
-        const batch = writeBatch(db);
-        batch.set(doc(db, 'notarizations', caseId), {
-          id: caseId,
-          ownerId: uid,
-          folderId: payload.folderId || 'unfiled',
-          title: payload.title,
-          fileName: payload.fileName,
-          fileType: payload.fileType,
-          fileSize: payload.fileSize,
-          actType: payload.actType,
-          notarizationMode: payload.notarizationMode,
-          meetingLocation: payload.meetingLocation,
-          status: 'draft',
-          signerName: payload.signerName,
-          signerEmail: payload.signerEmail,
-          documentText: payload.documentText,
-          documentHash: payload.documentHash,
-          idMethod:
-            payload.notarizationMode === 'in_person'
-              ? 'Physical Government Photo ID'
-              : 'Government Photo ID + KBA',
-          idScore: 0,
-          kbaPassed: false,
-          signerSignatureData: '',
-          signatureType: 'none',
-          notaryName: '',
-          notaryCommission: '',
-          notaryJurisdiction: '',
-          notaryExpires: '',
-          notaryStampDataUrl: '',
-          includeCertifiedLogo: payload.includeCertifiedLogo,
-          includeNotarizedMark: payload.includeNotarizedMark,
-          placement: DEFAULT_DOCUMENT_PLACEMENT,
-          certificateCode: '',
-          sealedHash: '',
-          signatureAlgorithm: '',
-          publicKeyJwk: '',
-          digitalSignature: '',
-          signedPayload: '',
-          timestampIso: '',
-          feeCents: payload.feeCents,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        batch.set(doc(db, 'notarizations', caseId, 'custodyEvents', eventId), {
+    if (authUser) {
+      const created = await apiCreateCase({
+        id: caseId,
+        folderId: payload.folderId || 'unfiled',
+        title: payload.title,
+        fileName: payload.fileName,
+        fileType: payload.fileType,
+        fileSize: payload.fileSize,
+        actType: payload.actType,
+        notarizationMode: payload.notarizationMode,
+        meetingLocation: payload.meetingLocation,
+        signerName: payload.signerName,
+        signerEmail: payload.signerEmail,
+        documentText: payload.documentText,
+        documentHash: payload.documentHash,
+        feeCents: payload.feeCents,
+        includeCertifiedLogo: payload.includeCertifiedLogo,
+        includeNotarizedMark: payload.includeNotarizedMark,
+        placement: DEFAULT_DOCUMENT_PLACEMENT,
+        custodyEvent: {
           id: eventId,
-          ownerId: uid,
-          caseId,
           step: 'Document Uploaded & Hashed',
-          actor: payload.signerName.slice(0, 100),
-          details: `Ingested ${payload.fileName.slice(0, 150)} (${
+          actor: payload.signerName,
+          details: `Ingested ${payload.fileName} (${
             payload.notarizationMode === 'in_person' ? 'In-Person' : 'Online RON'
           })`,
           eventHash: evHash,
-          recordedAt: serverTimestamp(),
-        });
-        await batch.commit();
-        setCases((prev) =>
-          prev.some((c) => c.id === caseId) ? prev : [optimisticCase, ...prev]
-        );
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, `notarizations/${caseId}`);
+        },
+      });
+      if (payload.uploadedFile) {
+        await apiUploadCaseFile(caseId, payload.uploadedFile);
       }
+      setCases((prev) => [created.caseRecord, ...prev]);
+      setCustodyByCase((prev) => ({
+        ...prev,
+        [caseId]: [created.custodyRecord],
+      }));
     } else {
+      const optimisticCase: NotarizationCase = {
+        id: caseId,
+        ownerId: 'local_preview',
+        folderId: payload.folderId || 'unfiled',
+        title: payload.title,
+        fileName: payload.fileName,
+        fileType: payload.fileType,
+        fileSize: payload.fileSize,
+        actType: payload.actType,
+        notarizationMode: payload.notarizationMode,
+        meetingLocation: payload.meetingLocation,
+        status: 'draft',
+        signerName: payload.signerName,
+        signerEmail: payload.signerEmail,
+        documentText: payload.documentText,
+        documentHash: payload.documentHash,
+        idMethod:
+          payload.notarizationMode === 'in_person'
+            ? 'Physical Government Photo ID'
+            : 'Government Photo ID + KBA',
+        idScore: 0,
+        kbaPassed: false,
+        signerSignatureData: '',
+        signatureType: 'none',
+        notaryName: '',
+        notaryCommission: '',
+        notaryJurisdiction: '',
+        notaryExpires: '',
+        notaryStampDataUrl: '',
+        includeCertifiedLogo: payload.includeCertifiedLogo,
+        includeNotarizedMark: payload.includeNotarizedMark,
+        placement: DEFAULT_DOCUMENT_PLACEMENT,
+        certificateCode: '',
+        sealedHash: '',
+        signatureAlgorithm: '',
+        publicKeyJwk: '',
+        digitalSignature: '',
+        signedPayload: '',
+        timestampIso: '',
+        feeCents: payload.feeCents,
+        createdAtIso: nowIso,
+        updatedAtIso: nowIso,
+      };
       setCases((prev) => [optimisticCase, ...prev]);
       setCustodyByCase((prev) => ({
         ...prev,
@@ -1007,15 +668,11 @@ export default function App() {
   };
 
   const handleMoveCaseFolder = async (caseId: string, folderId: string) => {
-    if (firebaseUser) {
-      try {
-        await updateDoc(doc(db, 'notarizations', caseId), {
-          folderId,
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
-      }
+    if (authUser && !caseId.startsWith('case_demo_')) {
+      const res = await apiUpdateCase(caseId, { folderId });
+      setCases((prev) =>
+        prev.map((c) => (c.id === caseId ? res.caseRecord : c))
+      );
     } else {
       setCases((prev) =>
         prev.map((c) =>
@@ -1029,79 +686,11 @@ export default function App() {
 
   const handleDeleteCase = async (caseId: string) => {
     void deleteLocalDocumentFile(caseId);
-    if (firebaseUser) {
-      try {
-        await deleteDoc(doc(db, 'notarizations', caseId));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `notarizations/${caseId}`);
-      }
-    } else {
-      setCases((prev) => prev.filter((c) => c.id !== caseId));
+    if (authUser && !caseId.startsWith('case_demo_')) {
+      await apiDeleteCase(caseId);
     }
+    setCases((prev) => prev.filter((c) => c.id !== caseId));
     if (activeCaseId === caseId) setActiveCaseId(null);
-  };
-
-  const appendCustodyEvent = async (
-    caseId: string,
-    step: string,
-    actor: string,
-    details: string
-  ) => {
-    const safeStep = step.trim().slice(0, 80) || 'Audit Event';
-    const safeActor = actor.trim().slice(0, 120) || 'Notary User';
-    const safeDetails = details.trim().slice(0, 300) || 'Session event recorded';
-    const existingEvents = custodyByCase[caseId] || [];
-    const prevHash =
-      existingEvents.length > 0
-        ? existingEvents[existingEvents.length - 1].eventHash
-        : 'GENESIS';
-    const nowIso = new Date().toISOString();
-    const eventHash = await computeCustodyEventHash(
-      prevHash,
-      safeStep,
-      safeActor,
-      safeDetails,
-      nowIso
-    );
-    const eventId = makeId('ev');
-
-    if (firebaseUser) {
-      try {
-        await setDoc(doc(db, 'notarizations', caseId, 'custodyEvents', eventId), {
-          id: eventId,
-          ownerId: firebaseUser.uid,
-          caseId,
-          step: safeStep,
-          actor: safeActor,
-          details: safeDetails,
-          eventHash,
-          recordedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(
-          err,
-          OperationType.CREATE,
-          `notarizations/${caseId}/custodyEvents/${eventId}`
-        );
-      }
-    } else {
-      setCustodyByCase((prev) => ({
-        ...prev,
-        [caseId]: [
-          ...(prev[caseId] || []),
-          {
-            id: eventId,
-            ownerId: 'local_preview',
-            caseId,
-            step: safeStep,
-            actor: safeActor,
-            details: safeDetails,
-            eventHash,
-            recordedAtIso: nowIso,
-          },
-        ],
-      }));
-    }
   };
 
   const handleChangeMode = async (
@@ -1118,13 +707,8 @@ export default function App() {
           ? meetingLocation
           : userProfile.location || 'San Francisco County, CA'
         : 'Remote Audio-Video Session';
-    const normalizedLocation = rawLocation.trim().slice(0, 155) || 'San Francisco County, CA';
-
-    pendingModeByCaseRef.current[caseId] = {
-      notarizationMode: mode,
-      meetingLocation: normalizedLocation,
-      ts: Date.now(),
-    };
+    const normalizedLocation =
+      rawLocation.trim().slice(0, 155) || 'San Francisco County, CA';
 
     setCases((prev) =>
       prev.map((c) =>
@@ -1139,19 +723,18 @@ export default function App() {
       )
     );
 
-    if (firebaseUser && !caseId.startsWith('case_demo_')) {
+    if (authUser && !caseId.startsWith('case_demo_')) {
       try {
-        await updateDoc(doc(db, 'notarizations', caseId), {
+        const res = await apiUpdateCase(caseId, {
           notarizationMode: mode,
           meetingLocation: normalizedLocation,
-          updatedAt: serverTimestamp(),
         });
-      } catch (err) {
-        delete pendingModeByCaseRef.current[caseId];
         setCases((prev) =>
-          prev.map((c) => (c.id === caseId ? target : c))
+          prev.map((c) => (c.id === caseId ? res.caseRecord : c))
         );
-        handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
+      } catch (err) {
+        setCases((prev) => prev.map((c) => (c.id === caseId ? target : c)));
+        throw err;
       }
     }
   };
@@ -1174,6 +757,25 @@ export default function App() {
         ? userProfile.location || 'San Francisco County, CA'
         : 'Remote Audio-Video Session');
 
+    const stepLabel =
+      target.notarizationMode === 'in_person'
+        ? 'Physical Presence & ID Verified'
+        : 'Identity & KBA Verified';
+    const detailsText = `${safeIdMethod} (${safeLocation}) verified at ${safeScore}%`;
+    const existingEvents = custodyByCase[caseId] || [];
+    const prevHash =
+      existingEvents.length > 0
+        ? existingEvents[existingEvents.length - 1].eventHash
+        : 'GENESIS';
+    const nowIso = new Date().toISOString();
+    const eventHash = await computeCustodyEventHash(
+      prevHash,
+      stepLabel,
+      target.signerName,
+      detailsText,
+      nowIso
+    );
+
     setCases((prev) =>
       prev.map((c) =>
         c.id === caseId
@@ -1184,37 +786,58 @@ export default function App() {
               idScore: safeScore,
               kbaPassed: true,
               meetingLocation: safeLocation,
-              updatedAtIso: new Date().toISOString(),
+              updatedAtIso: nowIso,
             }
           : c
       )
     );
 
-    if (firebaseUser && !caseId.startsWith('case_demo_')) {
+    if (authUser && !caseId.startsWith('case_demo_')) {
       try {
-        await updateDoc(doc(db, 'notarizations', caseId), {
+        const res = await apiUpdateCase(caseId, {
           status: 'identity_verified',
           idMethod: safeIdMethod,
           idScore: safeScore,
           kbaPassed: true,
           meetingLocation: safeLocation,
-          updatedAt: serverTimestamp(),
+          custodyEvent: {
+            step: stepLabel,
+            actor: target.signerName,
+            details: detailsText,
+            eventHash,
+          },
         });
-      } catch (err) {
         setCases((prev) =>
-          prev.map((c) => (c.id === caseId ? target : c))
+          prev.map((c) => (c.id === caseId ? res.caseRecord : c))
         );
-        handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
+        if (res.custodyRecord) {
+          setCustodyByCase((prev) => ({
+            ...prev,
+            [caseId]: [...(prev[caseId] || []), res.custodyRecord!],
+          }));
+        }
+      } catch (err) {
+        setCases((prev) => prev.map((c) => (c.id === caseId ? target : c)));
+        throw err;
       }
+    } else {
+      setCustodyByCase((prev) => ({
+        ...prev,
+        [caseId]: [
+          ...(prev[caseId] || []),
+          {
+            id: makeId('ev'),
+            ownerId: 'local_preview',
+            caseId,
+            step: stepLabel,
+            actor: target.signerName,
+            details: detailsText,
+            eventHash,
+            recordedAtIso: nowIso,
+          },
+        ],
+      }));
     }
-    await appendCustodyEvent(
-      caseId,
-      target.notarizationMode === 'in_person'
-        ? 'Physical Presence & ID Verified'
-        : 'Identity & KBA Verified',
-      target.signerName,
-      `${safeIdMethod} (${safeLocation}) verified at ${safeScore}%`
-    );
   };
 
   const handleApplySignature = async (
@@ -1224,11 +847,27 @@ export default function App() {
   ) => {
     const target = cases.find((c) => c.id === caseId);
     if (!target || target.status === 'notarized') return;
-    if (!signatureData || signatureData.length > 150000) {
+    if (!signatureData || signatureData.length > 180000) {
       throw new Error(
         'Signature image is too large. Please draw a simpler stroke or use a typed signature.'
       );
     }
+
+    const stepLabel = 'Signer Electronic Signature Applied';
+    const detailsText = `Captured ${signatureType} electronic signature`;
+    const existingEvents = custodyByCase[caseId] || [];
+    const prevHash =
+      existingEvents.length > 0
+        ? existingEvents[existingEvents.length - 1].eventHash
+        : 'GENESIS';
+    const nowIso = new Date().toISOString();
+    const eventHash = await computeCustodyEventHash(
+      prevHash,
+      stepLabel,
+      target.signerName,
+      detailsText,
+      nowIso
+    );
 
     setCases((prev) =>
       prev.map((c) =>
@@ -1238,33 +877,56 @@ export default function App() {
               status: 'signed',
               signerSignatureData: signatureData,
               signatureType,
-              updatedAtIso: new Date().toISOString(),
+              updatedAtIso: nowIso,
             }
           : c
       )
     );
 
-    if (firebaseUser && !caseId.startsWith('case_demo_')) {
+    if (authUser && !caseId.startsWith('case_demo_')) {
       try {
-        await updateDoc(doc(db, 'notarizations', caseId), {
+        const res = await apiUpdateCase(caseId, {
           status: 'signed',
           signerSignatureData: signatureData,
           signatureType,
-          updatedAt: serverTimestamp(),
+          custodyEvent: {
+            step: stepLabel,
+            actor: target.signerName,
+            details: detailsText,
+            eventHash,
+          },
         });
-      } catch (err) {
         setCases((prev) =>
-          prev.map((c) => (c.id === caseId ? target : c))
+          prev.map((c) => (c.id === caseId ? res.caseRecord : c))
         );
-        handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
+        if (res.custodyRecord) {
+          setCustodyByCase((prev) => ({
+            ...prev,
+            [caseId]: [...(prev[caseId] || []), res.custodyRecord!],
+          }));
+        }
+      } catch (err) {
+        setCases((prev) => prev.map((c) => (c.id === caseId ? target : c)));
+        throw err;
       }
+    } else {
+      setCustodyByCase((prev) => ({
+        ...prev,
+        [caseId]: [
+          ...(prev[caseId] || []),
+          {
+            id: makeId('ev'),
+            ownerId: 'local_preview',
+            caseId,
+            step: stepLabel,
+            actor: target.signerName,
+            details: detailsText,
+            eventHash,
+            recordedAtIso: nowIso,
+          },
+        ],
+      }));
     }
-    await appendCustodyEvent(
-      caseId,
-      'Signer Electronic Signature Applied',
-      target.signerName,
-      `Captured ${signatureType} electronic signature`
-    );
   };
 
   const handleToggleEmblems = async (
@@ -1288,18 +950,18 @@ export default function App() {
       )
     );
 
-    if (firebaseUser && !caseId.startsWith('case_demo_')) {
+    if (authUser && !caseId.startsWith('case_demo_')) {
       try {
-        await updateDoc(doc(db, 'notarizations', caseId), {
+        const res = await apiUpdateCase(caseId, {
           includeCertifiedLogo,
           includeNotarizedMark,
-          updatedAt: serverTimestamp(),
         });
-      } catch (err) {
         setCases((prev) =>
-          prev.map((c) => (c.id === caseId ? target : c))
+          prev.map((c) => (c.id === caseId ? res.caseRecord : c))
         );
-        handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
+      } catch (err) {
+        setCases((prev) => prev.map((c) => (c.id === caseId ? target : c)));
+        throw err;
       }
     }
   };
@@ -1332,11 +994,6 @@ export default function App() {
       stamp: sanitizeBox(placement.stamp),
     };
 
-    pendingPlacementByCaseRef.current[caseId] = {
-      placement: sanitized,
-      ts: Date.now(),
-    };
-
     setCases((prev) =>
       prev.map((c) =>
         c.id === caseId
@@ -1345,16 +1002,8 @@ export default function App() {
       )
     );
 
-    if (firebaseUser && !caseId.startsWith('case_demo_')) {
-      try {
-        await updateDoc(doc(db, 'notarizations', caseId), {
-          placement: sanitized,
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        delete pendingPlacementByCaseRef.current[caseId];
-        handleFirestoreError(err, OperationType.UPDATE, `notarizations/${caseId}`);
-      }
+    if (authUser && !caseId.startsWith('case_demo_')) {
+      await apiUpdateCase(caseId, { placement: sanitized });
     }
   };
 
@@ -1382,13 +1031,7 @@ export default function App() {
     const safeTitle = target.title.trim().slice(0, 140) || 'Notarized Document';
     const safeFileName = target.fileName.trim().slice(0, 180) || 'document.pdf';
     const safeSignerName = target.signerName.trim().slice(0, 100) || 'Principal Signer';
-    const safeIdMethod =
-      (target.idMethod || '').trim().slice(0, 80) ||
-      (target.notarizationMode === 'in_person'
-        ? 'Physical Government Photo ID'
-        : 'Government Photo ID + KBA');
     const safeLocation = (target.meetingLocation || '').trim().slice(0, 160);
-    const safeFeeCents = Math.max(0, Math.min(100000, Math.round(Number(target.feeCents) || 0)));
 
     const sealResult = await generateAndSignNotarization({
       caseId: target.id,
@@ -1405,12 +1048,6 @@ export default function App() {
       notaryJurisdiction,
     });
 
-    const entryId = makeId('jrn');
-    const entryNumber = `NJ-2026-${String(journalEntries.length + 1).padStart(
-      4,
-      '0'
-    )}`;
-    const eventId = makeId('ev');
     const existingEvents = custodyByCase[caseId] || [];
     const prevHash =
       existingEvents.length > 0
@@ -1424,89 +1061,44 @@ export default function App() {
       sealResult.timestampIso
     );
 
-    if (firebaseUser) {
-      const uid = firebaseUser.uid;
-      try {
-        const batch = writeBatch(db);
-        batch.update(doc(db, 'notarizations', caseId), {
-          status: 'notarized',
-          notaryName,
-          notaryCommission,
-          notaryJurisdiction,
-          notaryExpires,
-          notaryStampDataUrl: stampUrl,
-          includeCertifiedLogo,
-          includeNotarizedMark,
-          certificateCode: sealResult.certificateCode,
-          sealedHash: sealResult.sealedHash,
-          signatureAlgorithm: sealResult.signatureAlgorithm,
-          publicKeyJwk: sealResult.publicKeyJwk,
-          digitalSignature: sealResult.digitalSignature,
-          signedPayload: sealResult.signedPayload,
-          timestampIso: sealResult.timestampIso,
-          notarizedAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+    if (authUser && !caseId.startsWith('case_demo_')) {
+      const sealed = await apiSealCase(caseId, {
+        notaryName,
+        notaryCommission,
+        notaryJurisdiction,
+        notaryExpires,
+        notaryStampDataUrl: stampUrl,
+        includeCertifiedLogo,
+        includeNotarizedMark,
+        certificateCode: sealResult.certificateCode,
+        sealedHash: sealResult.sealedHash,
+        signatureAlgorithm: sealResult.signatureAlgorithm,
+        publicKeyJwk: sealResult.publicKeyJwk,
+        digitalSignature: sealResult.digitalSignature,
+        signedPayload: sealResult.signedPayload,
+        timestampIso: sealResult.timestampIso,
+        custodyEventHash: evHash,
+      });
 
-        batch.set(doc(db, 'journalEntries', entryId), {
-          id: entryId,
-          ownerId: uid,
-          caseId: target.id,
-          entryNumber,
-          documentTitle: safeTitle,
-          fileName: safeFileName,
-          actType: target.actType,
-          notarizationMode: target.notarizationMode,
-          meetingLocation: safeLocation,
-          signerName: safeSignerName,
-          idMethod: safeIdMethod,
-          certificateCode: sealResult.certificateCode,
-          sealedHash: sealResult.sealedHash,
-          timestampIso: sealResult.timestampIso,
-          feeCents: safeFeeCents,
-          recordedAt: serverTimestamp(),
-        });
-
-        batch.set(doc(db, 'verifications', sealResult.certificateCode), {
-          certificateCode: sealResult.certificateCode,
-          ownerId: uid,
-          caseId: target.id,
-          documentTitle: safeTitle,
-          fileName: safeFileName,
-          fileSize: Math.max(0, Math.min(104857600, Math.round(Number(target.fileSize) || 0))),
-          actType: target.actType,
-          notarizationMode: target.notarizationMode,
-          meetingLocation: safeLocation,
-          documentHash: target.documentHash,
-          sealedHash: sealResult.sealedHash,
-          signatureAlgorithm: sealResult.signatureAlgorithm,
-          publicKeyJwk: sealResult.publicKeyJwk,
-          digitalSignature: sealResult.digitalSignature,
-          signedPayload: sealResult.signedPayload,
-          timestampIso: sealResult.timestampIso,
-          notaryName,
-          notaryCommission,
-          notaryJurisdiction,
-          notaryExpires,
-          notarizedAt: serverTimestamp(),
-        });
-
-        batch.set(doc(db, 'notarizations', caseId, 'custodyEvents', eventId), {
-          id: eventId,
-          ownerId: uid,
-          caseId,
-          step: 'Notary Seal & ECDSA Timestamp Applied',
-          actor: notaryName,
-          details: `Certificate ${sealResult.certificateCode} sealed & recorded in statutory journal`.slice(0, 300),
-          eventHash: evHash,
-          recordedAt: serverTimestamp(),
-        });
-
-        await batch.commit();
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `notarizations/${caseId}`);
-      }
+      setCases((prev) =>
+        prev.map((c) => (c.id === caseId ? sealed.caseRecord : c))
+      );
+      setJournalEntries((prev) => [sealed.journalRecord, ...prev]);
+      setCustodyByCase((prev) => ({
+        ...prev,
+        [caseId]: [...(prev[caseId] || []), sealed.custodyRecord],
+      }));
+      setLocalVerifications((prev) => ({
+        ...prev,
+        [sealed.verificationRecord.certificateCode]: sealed.verificationRecord,
+      }));
     } else {
+      const entryId = makeId('jrn');
+      const entryNumber = `NJ-2026-${String(journalEntries.length + 1).padStart(
+        4,
+        '0'
+      )}`;
+      const eventId = makeId('ev');
       setCases((prev) =>
         prev.map((c) =>
           c.id === caseId
@@ -1570,34 +1162,33 @@ export default function App() {
           },
         ],
       }));
+      setLocalVerifications((prev) => ({
+        ...prev,
+        [sealResult.certificateCode]: {
+          certificateCode: sealResult.certificateCode,
+          ownerId: 'local_preview',
+          caseId: target.id,
+          documentTitle: target.title,
+          fileName: target.fileName,
+          fileSize: target.fileSize,
+          actType: target.actType,
+          notarizationMode: target.notarizationMode,
+          meetingLocation: target.meetingLocation,
+          documentHash: target.documentHash,
+          sealedHash: sealResult.sealedHash,
+          signatureAlgorithm: sealResult.signatureAlgorithm,
+          publicKeyJwk: sealResult.publicKeyJwk,
+          digitalSignature: sealResult.digitalSignature,
+          signedPayload: sealResult.signedPayload,
+          timestampIso: sealResult.timestampIso,
+          notaryName,
+          notaryCommission,
+          notaryJurisdiction,
+          notaryExpires,
+          notarizedAtIso: sealResult.timestampIso,
+        },
+      }));
     }
-
-    setLocalVerifications((prev) => ({
-      ...prev,
-      [sealResult.certificateCode]: {
-        certificateCode: sealResult.certificateCode,
-        ownerId: firebaseUser?.uid || 'local_preview',
-        caseId: target.id,
-        documentTitle: target.title,
-        fileName: target.fileName,
-        fileSize: target.fileSize,
-        actType: target.actType,
-        notarizationMode: target.notarizationMode,
-        meetingLocation: target.meetingLocation,
-        documentHash: target.documentHash,
-        sealedHash: sealResult.sealedHash,
-        signatureAlgorithm: sealResult.signatureAlgorithm,
-        publicKeyJwk: sealResult.publicKeyJwk,
-        digitalSignature: sealResult.digitalSignature,
-        signedPayload: sealResult.signedPayload,
-        timestampIso: sealResult.timestampIso,
-        notaryName,
-        notaryCommission,
-        notaryJurisdiction,
-        notaryExpires,
-        notarizedAtIso: sealResult.timestampIso,
-      },
-    }));
   };
 
   const handleSaveProfile = async (next: UserProfile) => {
@@ -1622,27 +1213,9 @@ export default function App() {
       savedSignatureType: sigType,
     };
 
-    if (firebaseUser) {
-      const uid = firebaseUser.uid;
-      const profileRef = doc(db, 'userProfiles', uid);
-      try {
-        const snap = await getDoc(profileRef);
-        if (snap.exists()) {
-          await updateDoc(profileRef, {
-            ...payloadFields,
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          await setDoc(profileRef, {
-            uid,
-            ...payloadFields,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `userProfiles/${uid}`);
-      }
+    if (authUser) {
+      const updated = await apiSaveProfile(payloadFields);
+      setUserProfile(updated);
     } else {
       setUserProfile({
         ...next,
@@ -1867,17 +1440,17 @@ export default function App() {
               Comm. #{userProfile.commissionNumber}
             </div>
             <div className="text-slate-500 truncate mt-0.5 text-[11px]">
-              {firebaseUser ? 'Firestore Cloud Synced' : 'Local Preview Mode'}
+              {authUser ? 'VPS SQLite Synced' : 'Local Preview Mode'}
             </div>
           </div>
 
-          {!firebaseUser ? (
+          {!authUser ? (
             <button
               type="button"
               onClick={() => setAuthModalOpen(true)}
               className="w-full py-2 px-3 text-xs font-semibold text-white bg-blue-800 rounded-md hover:bg-blue-900 transition-colors cursor-pointer"
             >
-              Sign In with Google / Email
+              Sign In / Create Account
             </button>
           ) : (
             <button
@@ -1952,7 +1525,7 @@ export default function App() {
               Verify Code
             </button>
 
-            {firebaseUser ? (
+            {authUser ? (
               <button
                 type="button"
                 onClick={() => setActiveView('profile')}
@@ -2109,13 +1682,15 @@ export default function App() {
 
           {activeView === 'profile' && (
             <ProfileView
-              firebaseUser={firebaseUser}
+              authUser={authUser}
               profile={userProfile}
               cases={cases}
               onSaveProfile={handleSaveProfile}
               onOpenAuthModal={() => setAuthModalOpen(true)}
               onSignOut={async () => {
-                await signOut(auth);
+                await authLogout();
+                setAuthUser(null);
+                setActiveCaseId(null);
               }}
               onOpenCase={(caseId) => {
                 setActiveCaseId(caseId);
@@ -2139,6 +1714,11 @@ export default function App() {
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
+        defaultToRegister={!hasAnyUsers}
+        onAuthenticated={(user) => {
+          setAuthUser(user);
+          setHasAnyUsers(true);
+        }}
       />
 
       {showGitHubModal && (

@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -8,9 +7,9 @@ import {
   ShieldCheck,
   Upload,
 } from 'lucide-react';
-import { db } from '../lib/firebase';
 import { sha256Hex, verifyNotarizationSignature } from '../lib/crypto';
 import { formatFileSize } from '../lib/documentParser';
+import { apiVerifyCertificate } from '../lib/localApi';
 import type { VerificationRecord } from '../types/notary';
 
 interface VerifyPortalViewProps {
@@ -45,35 +44,7 @@ export const VerifyPortalView: React.FC<VerifyPortalViewProps> = ({
     try {
       let found: VerificationRecord | null = localVerifications[cleaned] || null;
       if (!found) {
-        const snap = await getDoc(doc(db, 'verifications', cleaned));
-        if (snap.exists()) {
-          const data = snap.data();
-          found = {
-            certificateCode: String(data.certificateCode),
-            ownerId: String(data.ownerId),
-            caseId: String(data.caseId),
-            documentTitle: String(data.documentTitle),
-            fileName: String(data.fileName),
-            fileSize: Number(data.fileSize),
-            actType: data.actType,
-            notarizationMode: data.notarizationMode === 'in_person' ? 'in_person' : 'online',
-            meetingLocation: String(data.meetingLocation || ''),
-            documentHash: String(data.documentHash),
-            sealedHash: String(data.sealedHash),
-            signatureAlgorithm: String(data.signatureAlgorithm),
-            publicKeyJwk: String(data.publicKeyJwk),
-            digitalSignature: String(data.digitalSignature),
-            signedPayload: String(data.signedPayload),
-            timestampIso: String(data.timestampIso),
-            notaryName: String(data.notaryName),
-            notaryCommission: String(data.notaryCommission),
-            notaryJurisdiction: String(data.notaryJurisdiction),
-            notaryExpires: String(data.notaryExpires),
-            notarizedAtIso: data.timestampIso
-              ? String(data.timestampIso)
-              : new Date().toISOString(),
-          };
-        }
+        found = await apiVerifyCertificate(cleaned);
       }
 
       if (!found) {
